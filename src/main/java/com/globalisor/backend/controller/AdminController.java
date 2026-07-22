@@ -173,13 +173,19 @@ public class AdminController {
 
         if (excelData.containsKey("companyName") && excelData.get("companyName") != null) {
             String companyName = String.valueOf(excelData.get("companyName")).trim();
-            if (!companyName.isEmpty() && !"null".equalsIgnoreCase(companyName) && !"N/A".equalsIgnoreCase(companyName)) {
-                data.put("names", Arrays.asList(companyName));
-                
-                // Only update User's first name if current name is empty, generic placeholder, or matches default client format
-                if (user.getFirstName() == null || user.getFirstName().isEmpty() || user.getFirstName().startsWith("Client ") || "Client".equalsIgnoreCase(user.getFirstName())) {
+            boolean isPersonName = companyName.length() < 3 || (!companyName.contains(" ") && !companyName.toUpperCase().endsWith("LTD"));
+            boolean isPteLtd = companyName.toUpperCase().contains("PTE") || companyName.toUpperCase().contains("LTD") || companyName.toUpperCase().contains("LIMITED") || companyName.toUpperCase().contains("INC");
+
+            if (!companyName.isEmpty() && !"null".equalsIgnoreCase(companyName) && !"N/A".equalsIgnoreCase(companyName) && (!isPersonName || isPteLtd)) {
+                String existingName = user.getFirstName();
+                boolean isGeneric = (existingName == null || existingName.isEmpty() || existingName.startsWith("Client ") || "Client".equalsIgnoreCase(existingName) || (!existingName.contains(" ") && existingName.length() < 10));
+
+                if (isGeneric || isPteLtd) {
                     user.setFirstName(companyName);
                     user.setLastName("");
+                    data.put("names", Arrays.asList(companyName));
+                } else if (!data.containsKey("names") || data.get("names") == null) {
+                    data.put("names", Arrays.asList(existingName));
                 }
             }
         }
