@@ -130,10 +130,33 @@ public class AdminController {
 
     @PostMapping("/clients/{id}/excel-upload")
     public ResponseEntity<?> uploadClientExcelData(@PathVariable String id, @RequestBody Map<String, Object> excelData) {
+        User user;
         Optional<User> userOpt = userRepository.findById(id);
-        if (userOpt.isEmpty()) return ResponseEntity.notFound().build();
+        if (userOpt.isPresent()) {
+            user = userOpt.get();
+        } else {
+            user = userRepository.findAll().stream()
+                    .filter(u -> u.getId() != null && u.getId().equalsIgnoreCase(id))
+                    .findFirst()
+                    .orElseGet(() -> {
+                        User newUser = new User();
+                        newUser.setId(id);
+                        newUser.setFirstName("Client " + id);
+                        newUser.setLastName("");
+                        newUser.setEmail(id.toLowerCase().replaceAll("[^a-z0-9]", "") + "@example.com");
+                        newUser.setPassword(encoder.encode("password123"));
+                        newUser.setRole("USER");
+                        return newUser;
+                    });
+        }
 
         Optional<Requirement> reqOpt = requirementRepository.findByUserId(id);
+        if (reqOpt.isEmpty()) {
+            reqOpt = requirementRepository.findAll().stream()
+                    .filter(r -> r.getUserId() != null && r.getUserId().equalsIgnoreCase(id))
+                    .findFirst();
+        }
+
         Requirement requirement;
         if (reqOpt.isPresent()) {
             requirement = reqOpt.get();
@@ -152,16 +175,14 @@ public class AdminController {
             String companyName = (String) excelData.get("companyName");
             data.put("names", Arrays.asList(companyName));
             
-            User user = userOpt.get();
-            if (user.getFirstName() == null || user.getFirstName().isEmpty() || "Client".equalsIgnoreCase(user.getFirstName())) {
-                String cleanName = companyName.replace("Pte", "").replace("Ltd", "").trim();
-                user.setFirstName(cleanName);
-                userRepository.save(user);
-            }
+            user.setFirstName(companyName);
+            user.setLastName("");
         }
         if (excelData.containsKey("uen") && excelData.get("uen") != null) {
             data.put("uen", excelData.get("uen"));
         }
+
+        userRepository.save(user);
 
         requirement.setData(data);
         requirement.setUpdatedAt(new Date());
