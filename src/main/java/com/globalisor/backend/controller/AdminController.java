@@ -172,14 +172,22 @@ public class AdminController {
         data.put("excelData", excelData);
 
         if (excelData.containsKey("companyName") && excelData.get("companyName") != null) {
-            String companyName = (String) excelData.get("companyName");
-            data.put("names", Arrays.asList(companyName));
-            
-            user.setFirstName(companyName);
-            user.setLastName("");
+            String companyName = String.valueOf(excelData.get("companyName")).trim();
+            if (!companyName.isEmpty() && !"null".equalsIgnoreCase(companyName) && !"N/A".equalsIgnoreCase(companyName)) {
+                data.put("names", Arrays.asList(companyName));
+                
+                // Only update User's first name if current name is empty, generic placeholder, or matches default client format
+                if (user.getFirstName() == null || user.getFirstName().isEmpty() || user.getFirstName().startsWith("Client ") || "Client".equalsIgnoreCase(user.getFirstName())) {
+                    user.setFirstName(companyName);
+                    user.setLastName("");
+                }
+            }
         }
         if (excelData.containsKey("uen") && excelData.get("uen") != null) {
-            data.put("uen", excelData.get("uen"));
+            String uenStr = String.valueOf(excelData.get("uen")).trim();
+            if (!uenStr.isEmpty() && !"null".equalsIgnoreCase(uenStr) && !"N/A".equalsIgnoreCase(uenStr)) {
+                data.put("uen", uenStr);
+            }
         }
 
         userRepository.save(user);
