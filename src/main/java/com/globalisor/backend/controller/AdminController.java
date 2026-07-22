@@ -128,6 +128,52 @@ public class AdminController {
         return ResponseEntity.ok(response);
     }
 
+    @PostMapping("/clients/{id}/excel-upload")
+    public ResponseEntity<?> uploadClientExcelData(@PathVariable String id, @RequestBody Map<String, Object> excelData) {
+        Optional<User> userOpt = userRepository.findById(id);
+        if (userOpt.isEmpty()) return ResponseEntity.notFound().build();
+
+        Optional<Requirement> reqOpt = requirementRepository.findByUserId(id);
+        Requirement requirement;
+        if (reqOpt.isPresent()) {
+            requirement = reqOpt.get();
+        } else {
+            requirement = new Requirement();
+            requirement.setId("SRV-" + System.currentTimeMillis());
+            requirement.setUserId(id);
+            requirement.setStatus("approved");
+            requirement.setStaff("Sarah Lim");
+        }
+
+        Map<String, Object> data = requirement.getData() != null ? requirement.getData() : new HashMap<>();
+        data.put("excelData", excelData);
+
+        if (excelData.containsKey("companyName") && excelData.get("companyName") != null) {
+            String companyName = (String) excelData.get("companyName");
+            data.put("names", Arrays.asList(companyName));
+            
+            User user = userOpt.get();
+            if (user.getFirstName() == null || user.getFirstName().isEmpty() || "Client".equalsIgnoreCase(user.getFirstName())) {
+                String cleanName = companyName.replace("Pte", "").replace("Ltd", "").trim();
+                user.setFirstName(cleanName);
+                userRepository.save(user);
+            }
+        }
+        if (excelData.containsKey("uen") && excelData.get("uen") != null) {
+            data.put("uen", excelData.get("uen"));
+        }
+
+        requirement.setData(data);
+        requirement.setUpdatedAt(new Date());
+        requirementRepository.save(requirement);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", true);
+        response.put("message", "Client Excel register data updated successfully.");
+        response.put("details", data);
+        return ResponseEntity.ok(response);
+    }
+
     @Autowired
     private com.globalisor.backend.service.NotificationService notificationService;
 
