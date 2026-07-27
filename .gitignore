@@ -31,3 +31,11 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### GCP Credentials ###
+gcp-key.json
+*.json
+
+### Migration Scripts ###
+migrate_zip_documents.py
+

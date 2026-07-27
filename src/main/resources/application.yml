@@ -3,21 +3,32 @@ spring:
     name: backend
   data:
     mongodb:
-      uri: "mongodb+srv://greenbridge_db_user:Pass%40green@globalisor.m4zuxpm.mongodb.net/globalisor?appName=globalisor"
-      database: globalisor
+      uri: ${SPRING_DATA_MONGODB_URI:mongodb+srv://greenbridge_db_user:Pass%40green@globalisor.m4zuxpm.mongodb.net/globalisor?appName=globalisor}
+      database: ${SPRING_DATA_MONGODB_DATABASE:globalisor}
+
+server:
+  port: ${PORT:8080}
 
 logging:
   level:
-    org.springframework.web: DEBUG
-    org.springframework.web.servlet: DEBUG
-    com.globalisor.backend: DEBUG
+    org.springframework.web: INFO
+    org.springframework.web.servlet: INFO
+    com.globalisor.backend: INFO
 
 globalisor:
   app:
-    jwtSecret: globalisorSecretKeyThatIsVeryLongAndSecureEnoughForHS256Algorithm1234567890
-    jwtExpirationMs: 86400000
-    seed: false
+    jwtSecret: ${GLOBALISOR_APP_JWTSECRET:globalisorSecretKeyThatIsVeryLongAndSecureEnoughForHS256Algorithm1234567890}
+    jwtExpirationMs: ${GLOBALISOR_APP_JWTEXPIRATIONMS:86400000}
+    seed: ${GLOBALISOR_APP_SEED:false}
 
 gemini:
   api:
-    key: ""
+    key: ${GEMINI_API_KEY:""}
+
+gcp:
+  storage:
+    bucket-name: ${GCP_STORAGE_BUCKET_NAME:globalisor-client-documents}
+    credentials-file: ${GCP_CREDENTIALS_FILE:gcp-key.json}
+    credentials-json: ${GCP_CREDENTIALS_JSON:""}
+    location: ${GCP_STORAGE_LOCATION:asia-southeast1}
+

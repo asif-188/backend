@@ -24,7 +24,19 @@ public class ClientDocument {
     private String companyName;
     private String service;
     private String documentType; // passport, proof_of_address, director_id, business_plan, etc.
-    private String uploadSource; // "Pre-Registration", "Client Portal", "Applications", "Messages", etc.
+    private String uploadSource; // "Pre-Registration", "Client Portal", "Applications", "Messages", "Migration", etc.
+
+    // Multi-tenant & GCP Storage Migration fields
+    private String tenantId;
+    private String category; // AML/CDD, Tax, Passport, BizFile, Invoice, NRIC/FIN, Lease/Tenancy, Constitution, Bank Statement, Other
+    private String suggestedModule; // Compliance, Tax, KYC, Company, Finance, Director/Shareholder, Registered Office, Misc
+    private String gcsBucket;
+    private String gcsBlobName;
+    private String originalPath;
+    private String fileExtension;
+    private Long fileSize;
+    private String uploadDate;
+
     private List<String> versions = new ArrayList<>();
     private List<String> activityLogs = new ArrayList<>();
 }
