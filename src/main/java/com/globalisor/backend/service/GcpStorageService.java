@@ -45,44 +45,61 @@ public class GcpStorageService {
         try {
             GoogleCredentials credentials = null;
 
-            // 1. Try loading from GCP_CREDENTIALS_JSON property or env var
-            String envJson = System.getenv("GCP_CREDENTIALS_JSON");
-            if (envJson == null || envJson.trim().isEmpty()) {
-                envJson = credentialsJson;
-            }
-
-            if (envJson != null && !envJson.trim().isEmpty()) {
-                log.info("Loading GCP Service Account credentials from environment JSON string...");
-                try (InputStream is = new ByteArrayInputStream(envJson.getBytes(StandardCharsets.UTF_8))) {
-                    credentials = GoogleCredentials.fromStream(is);
-                }
-            } else {
-                // 2. Try loading from GCP_CREDENTIALS_BASE64
-                String envBase64 = System.getenv("GCP_CREDENTIALS_BASE64");
-                if (envBase64 != null && !envBase64.trim().isEmpty()) {
-                    log.info("Loading GCP Service Account credentials from Base64 environment string...");
-                    byte[] decoded = Base64.getDecoder().decode(envBase64.trim());
-                    try (InputStream is = new ByteArrayInputStream(decoded)) {
-                        credentials = GoogleCredentials.fromStream(is);
-                    }
-                }
-            }
-
-            // 3. Try loading from file
-            if (credentials == null) {
-                File keyFile = new File(credentialsFile);
-                if (keyFile.exists()) {
+            // 1. Try loading from file first (gcp-key.json)
+            File keyFile = new File(credentialsFile);
+            if (keyFile.exists()) {
+                try {
                     log.info("Loading GCP Service Account credentials from file: {}", keyFile.getAbsolutePath());
                     try (InputStream is = new FileInputStream(keyFile)) {
                         credentials = GoogleCredentials.fromStream(is);
                     }
-                } else {
+                } catch (Exception e) {
+                    log.warn("Failed to load credentials from file '{}': {}", credentialsFile, e.getMessage());
+                }
+            }
+
+            // 2. Try loading from GCP_CREDENTIALS_JSON property or env var
+            if (credentials == null) {
+                String envJson = System.getenv("GCP_CREDENTIALS_JSON");
+                if (envJson == null || envJson.trim().isEmpty()) {
+                    envJson = credentialsJson;
+                }
+
+                if (envJson != null && !envJson.trim().isEmpty()) {
                     try {
-                        log.info("Attempting to load GCP Application Default Credentials...");
-                        credentials = GoogleCredentials.getApplicationDefault();
+                        log.info("Loading GCP Service Account credentials from environment JSON string...");
+                        try (InputStream is = new ByteArrayInputStream(envJson.getBytes(StandardCharsets.UTF_8))) {
+                            credentials = GoogleCredentials.fromStream(is);
+                        }
                     } catch (Exception e) {
-                        log.warn("GCP Credentials file '{}' not found and ADC unavailable: {}. Storage will operate in fallback mode until key is updated.", credentialsFile, e.getMessage());
+                        log.warn("Failed to parse GCP_CREDENTIALS_JSON: {}", e.getMessage());
                     }
+                }
+            }
+
+            // 3. Try loading from GCP_CREDENTIALS_BASE64
+            if (credentials == null) {
+                String envBase64 = System.getenv("GCP_CREDENTIALS_BASE64");
+                if (envBase64 != null && !envBase64.trim().isEmpty()) {
+                    try {
+                        log.info("Loading GCP Service Account credentials from Base64 environment string...");
+                        byte[] decoded = Base64.getDecoder().decode(envBase64.trim());
+                        try (InputStream is = new ByteArrayInputStream(decoded)) {
+                            credentials = GoogleCredentials.fromStream(is);
+                        }
+                    } catch (Exception e) {
+                        log.warn("Failed to parse GCP_CREDENTIALS_BASE64: {}", e.getMessage());
+                    }
+                }
+            }
+
+            // 4. Try Application Default Credentials
+            if (credentials == null) {
+                try {
+                    log.info("Attempting to load GCP Application Default Credentials...");
+                    credentials = GoogleCredentials.getApplicationDefault();
+                } catch (Exception e) {
+                    log.warn("GCP Credentials file '{}' not found and ADC unavailable: {}", credentialsFile, e.getMessage());
                 }
             }
 
@@ -95,6 +112,8 @@ public class GcpStorageService {
                 ensureBucketExists();
                 initialized = true;
                 log.info("GcpStorageService initialized successfully for bucket: {}", bucketName);
+            } else {
+                log.error("GcpStorageService: No valid GCP Credentials found!");
             }
         } catch (Exception e) {
             log.error("Failed to initialize GcpStorageService: {}", e.getMessage(), e);
@@ -128,8 +147,8 @@ public class GcpStorageService {
 
     public String uploadFile(String blobName, byte[] content, String contentType) {
         if (!isInitialized()) {
-            log.warn("GCP Storage not initialized. Mocking upload for blob: {}", blobName);
-            return blobName;
+            log.error("GCP Storage not initialized when uploading blob: {}", blobName);
+            throw new RuntimeException("GCP Storage service is not initialized. Check GCP credentials.");
         }
 
         try {
@@ -174,6 +193,24 @@ public class GcpStorageService {
         } catch (Exception e) {
             log.error("Error downloading blob {}: {}", blobName, e.getMessage(), e);
             throw new RuntimeException("GCP Download failed: " + e.getMessage(), e);
+        }
+    }
+
+    public boolean deleteFile(String blobName) {
+        if (!isInitialized() || blobName == null || blobName.isEmpty()) {
+            return false;
+        }
+        try {
+            boolean deleted = storage.delete(BlobId.of(bucketName, blobName));
+            if (deleted) {
+                log.info("Successfully deleted blob from GCS: {}/{}", bucketName, blobName);
+            } else {
+                log.warn("Blob not found in GCS for deletion: {}/{}", bucketName, blobName);
+            }
+            return deleted;
+        } catch (Exception e) {
+            log.error("Error deleting blob from GCS: {}", e.getMessage(), e);
+            return false;
         }
     }
 }

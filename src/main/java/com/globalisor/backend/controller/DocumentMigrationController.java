@@ -27,6 +27,66 @@ public class DocumentMigrationController {
     @Autowired
     private GcpStorageService gcpStorageService;
 
+    // Clear all document metadata records from MongoDB documents collection
+    @DeleteMapping("/clear-all")
+    public ResponseEntity<Map<String, Object>> clearAllDocuments() {
+        try {
+            long count = clientDocumentRepository.count();
+            clientDocumentRepository.deleteAll();
+            log.info("Cleared all {} client documents from MongoDB documents collection.", count);
+            Map<String, Object> res = new HashMap<>();
+            res.put("status", "success");
+            res.put("deletedCount", count);
+            res.put("message", "All document metadata cleared from MongoDB collection.");
+            return ResponseEntity.ok(res);
+        } catch (Exception e) {
+            log.error("Failed to clear MongoDB document records: {}", e.getMessage(), e);
+            Map<String, Object> err = new HashMap<>();
+            err.put("error", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(err);
+        }
+    }
+
+    // Delete single document by ID (Purges MongoDB metadata & GCP Cloud Storage blob)
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Map<String, Object>> deleteDocument(@PathVariable("id") String id) {
+        try {
+            Optional<ClientDocument> optional = clientDocumentRepository.findById(id);
+            if (optional.isEmpty()) {
+                List<ClientDocument> all = clientDocumentRepository.findAll();
+                optional = all.stream().filter(d -> id.equalsIgnoreCase(d.getId()) || id.equalsIgnoreCase(d.getTitle()) || (d.getTitle() != null && d.getTitle().equalsIgnoreCase(id))).findFirst();
+            }
+
+            if (optional.isEmpty()) {
+                Map<String, Object> err = new HashMap<>();
+                err.put("error", "Document not found with ID: " + id);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(err);
+            }
+
+            ClientDocument doc = optional.get();
+
+            // Delete blob from GCP Cloud Storage if present
+            if (doc.getGcsBlobName() != null && !doc.getGcsBlobName().isEmpty()) {
+                gcpStorageService.deleteFile(doc.getGcsBlobName());
+            }
+
+            // Delete metadata from MongoDB
+            clientDocumentRepository.delete(doc);
+            log.info("Successfully deleted document {} ('{}') from MongoDB and GCP Cloud Storage.", doc.getId(), doc.getTitle());
+
+            Map<String, Object> res = new HashMap<>();
+            res.put("status", "success");
+            res.put("message", "Document deleted successfully.");
+            res.put("deletedId", doc.getId());
+            return ResponseEntity.ok(res);
+        } catch (Exception e) {
+            log.error("Failed to delete document {}: {}", id, e.getMessage(), e);
+            Map<String, Object> err = new HashMap<>();
+            err.put("error", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(err);
+        }
+    }
+
     // Get documents by client ID (Categorized Smart View)
     @GetMapping("/client/{clientId}")
     public ResponseEntity<Map<String, Object>> getClientDocuments(
@@ -138,6 +198,27 @@ public class DocumentMigrationController {
         return ResponseEntity.ok(res);
     }
 
+    private String resolveSuggestedModule(String category, String providedModule) {
+        if (providedModule != null && !providedModule.isEmpty() && !"Misc".equalsIgnoreCase(providedModule)) {
+            return providedModule;
+        }
+        if (category == null) return "Misc";
+        switch (category.trim()) {
+            case "KYC": return "KYC";
+            case "Invoice": return "Finance";
+            case "Permanent folder":
+            case "Incorporation": return "Company";
+            case "All Signed":
+            case "Change of CS":
+            case "Change of Auditors":
+            case "AGM AR": return "Compliance";
+            case "Change of Address": return "Registered Office";
+            case "Change of Directors":
+            case "Allotment of Shares": return "Director/Shareholder";
+            default: return "Misc";
+        }
+    }
+
     // Multipart File Upload to GCP Bucket & MongoDB
     @PostMapping("/upload")
     public ResponseEntity<Map<String, Object>> uploadDocument(
@@ -145,7 +226,7 @@ public class DocumentMigrationController {
             @RequestParam("clientId") String clientId,
             @RequestParam(value = "companyName", required = false) String companyName,
             @RequestParam(value = "category", defaultValue = "Other") String category,
-            @RequestParam(value = "suggestedModule", defaultValue = "Misc") String suggestedModule,
+            @RequestParam(value = "suggestedModule", required = false) String suggestedModule,
             @RequestParam(value = "tenantId", defaultValue = "greenbridge") String tenantId) {
 
         try {
@@ -165,20 +246,21 @@ public class DocumentMigrationController {
             }
 
             String now = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
+            String module = resolveSuggestedModule(category, suggestedModule);
 
             ClientDocument doc = new ClientDocument();
             doc.setTitle(originalFileName);
             doc.setClientId(clientId);
             doc.setCompanyName(companyName);
             doc.setCategory(category);
-            doc.setSuggestedModule(suggestedModule);
+            doc.setSuggestedModule(module);
             doc.setOriginalPath(originalFileName);
             doc.setFileExtension(extension);
             doc.setFileSize(file.getSize());
             doc.setTenantId(tenantId);
             doc.setGcsBucket(gcpStorageService.getBucketName());
             doc.setGcsBlobName(blobName);
-            doc.setUploadSource("Client Portal Document Upload");
+            doc.setUploadSource("Categorized Document Upload");
             doc.setUploadDate(now);
             doc.setDate(now.split(" ")[0]);
             doc.setStatus("approved");
@@ -191,6 +273,95 @@ public class DocumentMigrationController {
             return ResponseEntity.ok(res);
         } catch (Exception e) {
             log.error("Upload error: {}", e.getMessage(), e);
+            Map<String, Object> err = new HashMap<>();
+            err.put("error", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(err);
+        }
+    }
+
+    // Multipart Batch File Upload by Category to GCP Bucket & MongoDB
+    @PostMapping("/upload-batch")
+    public ResponseEntity<Map<String, Object>> uploadBatchDocuments(
+            @RequestParam(value = "files", required = false) MultipartFile[] files,
+            @RequestParam("clientId") String clientId,
+            @RequestParam(value = "companyName", required = false) String companyName,
+            @RequestParam(value = "category", defaultValue = "Other") String category,
+            @RequestParam(value = "suggestedModule", required = false) String suggestedModule,
+            @RequestParam(value = "tenantId", defaultValue = "greenbridge") String tenantId,
+            org.springframework.web.multipart.MultipartHttpServletRequest request) {
+
+        try {
+            List<MultipartFile> allFiles = new ArrayList<>();
+            if (files != null && files.length > 0) {
+                for (MultipartFile f : files) {
+                    if (f != null && !f.isEmpty()) allFiles.add(f);
+                }
+            }
+            if (request != null && request.getMultiFileMap() != null) {
+                for (List<MultipartFile> fileList : request.getMultiFileMap().values()) {
+                    for (MultipartFile f : fileList) {
+                        if (f != null && !f.isEmpty() && !allFiles.contains(f)) {
+                            allFiles.add(f);
+                        }
+                    }
+                }
+            }
+
+            if (allFiles.isEmpty()) {
+                Map<String, Object> err = new HashMap<>();
+                err.put("error", "No files provided for batch upload.");
+                return ResponseEntity.badRequest().body(err);
+            }
+
+            List<ClientDocument> savedDocs = new ArrayList<>();
+            String now = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
+            String module = resolveSuggestedModule(category, suggestedModule);
+
+            for (MultipartFile file : allFiles) {
+                if (file.isEmpty()) continue;
+
+                String originalFileName = file.getOriginalFilename();
+                String extension = originalFileName != null && originalFileName.contains(".") ?
+                        originalFileName.substring(originalFileName.lastIndexOf(".")) : ".pdf";
+
+                String blobName = String.format("tenants/%s/clients/%s/%s/%s",
+                        tenantId,
+                        clientId,
+                        category.replaceAll("[^a-zA-Z0-9_-]", "_"),
+                        originalFileName);
+
+                if (gcpStorageService.isInitialized()) {
+                    gcpStorageService.uploadFile(blobName, file.getBytes(), file.getContentType());
+                }
+
+                ClientDocument doc = new ClientDocument();
+                doc.setTitle(originalFileName);
+                doc.setClientId(clientId);
+                doc.setCompanyName(companyName);
+                doc.setCategory(category);
+                doc.setSuggestedModule(module);
+                doc.setOriginalPath(originalFileName);
+                doc.setFileExtension(extension);
+                doc.setFileSize(file.getSize());
+                doc.setTenantId(tenantId);
+                doc.setGcsBucket(gcpStorageService.getBucketName());
+                doc.setGcsBlobName(blobName);
+                doc.setUploadSource("Categorized Manual Migration Upload");
+                doc.setUploadDate(now);
+                doc.setDate(now.split(" ")[0]);
+                doc.setStatus("approved");
+
+                savedDocs.add(clientDocumentRepository.save(doc));
+            }
+
+            Map<String, Object> res = new HashMap<>();
+            res.put("status", "success");
+            res.put("uploadedCount", savedDocs.size());
+            res.put("category", category);
+            res.put("documents", savedDocs);
+            return ResponseEntity.ok(res);
+        } catch (Exception e) {
+            log.error("Batch upload error: {}", e.getMessage(), e);
             Map<String, Object> err = new HashMap<>();
             err.put("error", e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(err);
