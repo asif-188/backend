@@ -201,7 +201,7 @@ public class BusinessIntelligenceController {
         }
 
         // 5. Director Specific Queries
-        if (q.contains("director")) {
+        if (q.contains("director") || q.contains("directors") || q.contains("nominee") || q.contains("nominie")) {
             List<?> dirList = excel != null && excel.get("directors") instanceof List ? (List<?>) excel.get("directors") : new ArrayList<>();
 
             List<Map<?, ?>> activeDirs = new ArrayList<>();
@@ -220,6 +220,61 @@ public class BusinessIntelligenceController {
                         activeDirs.add(d);
                     }
                 }
+            }
+
+            boolean isNomineeQuery = q.contains("nominee") || q.contains("nominie");
+
+            if (isNomineeQuery) {
+                List<Map<?, ?>> nomineeDirs = new ArrayList<>();
+                for (Map<?, ?> d : activeDirs) {
+                    String type = d.get("type") != null ? d.get("type").toString() : (d.get("designation") != null ? d.get("designation").toString() : "");
+                    String name = d.get("name") != null ? d.get("name").toString() : "";
+                    Boolean isNom = d.get("isNominee") != null ? Boolean.parseBoolean(d.get("isNominee").toString()) : false;
+                    if (isNom || type.toLowerCase().contains("nominee") || name.toLowerCase().contains("nominee")) {
+                        nomineeDirs.add(d);
+                    }
+                }
+
+                if (nomineeDirs.isEmpty()) {
+                    for (Map<?, ?> d : formerDirs) {
+                        String type = d.get("type") != null ? d.get("type").toString() : (d.get("designation") != null ? d.get("designation").toString() : "");
+                        Boolean isNom = d.get("isNominee") != null ? Boolean.parseBoolean(d.get("isNominee").toString()) : false;
+                        if (isNom || type.toLowerCase().contains("nominee")) {
+                            nomineeDirs.add(d);
+                        }
+                    }
+                }
+
+                StringBuilder sb = new StringBuilder();
+                if (!nomineeDirs.isEmpty()) {
+                    sb.append("👨‍💼 **Nominee Director Information: ").append(compName).append("**\n\n");
+                    int idx = 1;
+                    for (Map<?, ?> d : nomineeDirs) {
+                        String name = d.get("name") != null ? d.get("name").toString() : "Nominee Director";
+                        String type = d.get("type") != null ? d.get("type").toString() : "Nominee Director";
+                        String appDate = d.get("appointmentDate") != null ? d.get("appointmentDate").toString() : "—";
+                        String nat = d.get("nationality") != null ? d.get("nationality").toString() : "—";
+                        String addr = d.get("address") != null ? d.get("address").toString() : "—";
+                        String email = d.get("email") != null ? d.get("email").toString() : "N/A";
+                        String phone = d.get("phone") != null ? d.get("phone").toString() : (d.get("mobile") != null ? d.get("mobile").toString() : "N/A");
+
+                        sb.append(idx++).append(". **").append(name).append("**\n");
+                        sb.append("   • Designation: `").append(type).append("`\n");
+                        sb.append("   • Appointed On: `").append(appDate).append("`\n");
+                        sb.append("   • Nationality: `").append(nat).append("`\n");
+                        if (!"N/A".equalsIgnoreCase(email) || !"N/A".equalsIgnoreCase(phone)) {
+                            sb.append("   • Contact: `").append(email).append("` | `").append(phone).append("`\n");
+                        }
+                        sb.append("   • Address: `").append(addr).append("`\n\n");
+                    }
+                } else {
+                    sb.append("👨‍💼 **Nominee Director Information: ").append(compName).append("**\n\n");
+                    sb.append("No Nominee Director is currently registered for **").append(compName).append("**.\n");
+                }
+
+                response.put("reply", sb.toString());
+                response.put("type", "nominee_director_summary");
+                return ResponseEntity.ok(response);
             }
 
             StringBuilder sb = new StringBuilder();
