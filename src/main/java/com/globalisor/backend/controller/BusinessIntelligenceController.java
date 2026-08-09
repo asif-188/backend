@@ -7,8 +7,13 @@ import com.globalisor.backend.repository.ClientDocumentRepository;
 import com.globalisor.backend.repository.OnboardingRepository;
 import com.globalisor.backend.repository.RequirementRepository;
 import com.globalisor.backend.repository.UserRepository;
+import com.globalisor.backend.service.DocumentGenerationService;
+import com.globalisor.backend.service.DocumentGenerationService.NomineeAppointmentDocumentData;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -34,6 +39,9 @@ public class BusinessIntelligenceController {
 
     @Autowired
     private RequirementRepository requirementRepository;
+
+    @Autowired
+    private DocumentGenerationService documentGenerationService;
 
     private Requirement findMatchingRequirement(List<Requirement> reqs, String q) {
         if (reqs == null || reqs.isEmpty() || q == null) return null;
@@ -197,6 +205,39 @@ public class BusinessIntelligenceController {
             sb.append("4. **Shareholders Tab**: Manage capital shareholdings, share classes, and personal info.\n");
             response.put("reply", sb.toString());
             response.put("type", "profile_completion_query");
+            return ResponseEntity.ok(response);
+        }
+
+        // 4.5 Nominee Director Appointment Document Generation Query
+        boolean isDocAppointmentQuery = (q.contains("appointment") || q.contains("appoinment")) &&
+                (q.contains("nominee") || q.contains("nominie") || q.contains("director")) &&
+                (q.contains("document") || q.contains("form") || q.contains("doc") || q.contains("give me") || q.contains("generate") || q.contains("create") || q.contains("show") || q.contains("get"));
+
+        if (!isDocAppointmentQuery && (q.contains("form 45") || q.contains("form45") || q.contains("consent to act as director"))) {
+            isDocAppointmentQuery = true;
+        }
+
+        if (isDocAppointmentQuery) {
+            NomineeAppointmentDocumentData docData = documentGenerationService.createDocumentDataFromRequirement(match, query);
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("📄 **Nominee Director Appointment Document (Form 45) Prepared**\n\n");
+            sb.append("The statutory Nominee Director Appointment document (ACRA Form 45) has been prepared for **").append(docData.getCompanyName()).append("**:\n\n");
+            sb.append("• **Company Name:** `").append(docData.getCompanyName()).append("`\n");
+            sb.append("• **Company UEN:** `").append(docData.getUen()).append("`\n");
+            sb.append("• **Appointed Nominee Director:** `").append(docData.getNomineeName()).append("`\n");
+            sb.append("• **NRIC / ID Number:** `").append(docData.getNomineeIdNumber()).append("`\n");
+            sb.append("• **Effective Date:** `").append(docData.getEffectiveDate()).append("`\n\n");
+            sb.append("🔗 **Actions & Access:**\n");
+            sb.append("👉 [📄 Open & Edit Appointment Document (Form 45)](/admin/document-viewer.html?docId=").append(docData.getId()).append(")\n\n");
+            sb.append("👉 [⬇️ Download .DOCX Document](/api/admin/intelligence/document/").append(docData.getId()).append("/download)\n\n");
+            sb.append("💡 *Click the link above to view the ACRA Form 45 in a new tab, edit any details in real-time, and download or print the updated document.*");
+
+            response.put("reply", sb.toString());
+            response.put("type", "nominee_director_appointment_document");
+            response.put("docId", docData.getId());
+            response.put("viewUrl", "/admin/document-viewer.html?docId=" + docData.getId());
+            response.put("downloadUrl", "/api/admin/intelligence/document/" + docData.getId() + "/download");
             return ResponseEntity.ok(response);
         }
 
@@ -434,5 +475,49 @@ public class BusinessIntelligenceController {
         response.put("reply", sb.toString());
         response.put("type", "general_overview");
         return ResponseEntity.ok(response);
+    }
+
+    @GetMapping("/document/{docId}/data")
+    public ResponseEntity<?> getDocumentData(@PathVariable("docId") String docId) {
+        NomineeAppointmentDocumentData doc = documentGenerationService.getDocumentData(docId);
+        if (doc == null) {
+            Requirement req = requirementRepository.findAll().stream().findFirst().orElse(null);
+            doc = documentGenerationService.createDocumentDataFromRequirement(req, "default");
+            doc.setId(docId);
+        }
+        Map<String, Object> res = new HashMap<>();
+        res.put("status", "success");
+        res.put("data", doc);
+        return ResponseEntity.ok(res);
+    }
+
+    @PostMapping("/document/{docId}/update")
+    public ResponseEntity<?> updateDocumentData(@PathVariable("docId") String docId, @RequestBody Map<String, Object> updates) {
+        NomineeAppointmentDocumentData updated = documentGenerationService.updateDocumentData(docId, updates);
+        Map<String, Object> res = new HashMap<>();
+        res.put("status", "success");
+        res.put("data", updated);
+        return ResponseEntity.ok(res);
+    }
+
+    @GetMapping("/document/{docId}/download")
+    public ResponseEntity<byte[]> downloadDocument(@PathVariable("docId") String docId) {
+        try {
+            NomineeAppointmentDocumentData doc = documentGenerationService.getDocumentData(docId);
+            if (doc == null) {
+                Requirement req = requirementRepository.findAll().stream().findFirst().orElse(null);
+                doc = documentGenerationService.createDocumentDataFromRequirement(req, "default");
+            }
+            byte[] bytes = documentGenerationService.generateDocxBytes(doc);
+            String safeName = doc.getCompanyName().replaceAll("[^a-zA-Z0-9.-]", "_");
+
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"Nominee-Director-Appointment-" + safeName + ".docx\"")
+                    .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
+                    .body(bytes);
+        } catch (Exception e) {
+            log.error("Failed to generate DOCX for docId {}", docId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
     }
 }
