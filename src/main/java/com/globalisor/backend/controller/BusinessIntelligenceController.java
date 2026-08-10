@@ -43,8 +43,34 @@ public class BusinessIntelligenceController {
     @Autowired
     private DocumentGenerationService documentGenerationService;
 
-    private Requirement findMatchingRequirement(List<Requirement> reqs, String q) {
-        if (reqs == null || reqs.isEmpty() || q == null) return null;
+    private Requirement findMatchingRequirement(List<Requirement> reqs, String q, String companyHint) {
+        if (reqs == null || reqs.isEmpty()) return null;
+
+        // 0. Match companyHint if provided
+        if (companyHint != null && !companyHint.trim().isEmpty()) {
+            String cleanHint = companyHint.toLowerCase().trim();
+            for (Requirement r : reqs) {
+                Map<String, Object> data = r.getData();
+                if (data == null) continue;
+                Object excelObj = data.get("excelData");
+                if (excelObj instanceof Map) {
+                    Map<?, ?> excel = (Map<?, ?>) excelObj;
+                    Object cNameObj = excel.get("companyName");
+                    if (cNameObj != null) {
+                        String cName = cNameObj.toString().toLowerCase().trim();
+                        String simplifiedName = cName.replace("pte. ltd.", "").replace("pte ltd", "").trim();
+                        if (cName.contains(cleanHint) || cleanHint.contains(simplifiedName) || simplifiedName.contains(cleanHint)) {
+                            return r;
+                        }
+                    }
+                }
+                if (r.getUserId() != null && r.getUserId().equalsIgnoreCase(companyHint.trim())) {
+                    return r;
+                }
+            }
+        }
+
+        if (q == null) return reqs.get(0);
         String cleanQ = q.toLowerCase();
 
         // 1. Direct name or UEN match
@@ -85,7 +111,7 @@ public class BusinessIntelligenceController {
                 if (cNameObj != null) {
                     String[] words = cNameObj.toString().toLowerCase().split("\\s+");
                     for (String w : words) {
-                        if (w.length() >= 3 && !w.equals("pte") && !w.equals("ltd") && !w.equals("inc") && cleanQ.contains(w)) {
+                        if (w.length() >= 2 && !w.equals("pte") && !w.equals("ltd") && !w.equals("inc") && !w.equals("and") && cleanQ.contains(w)) {
                             return r;
                         }
                     }
@@ -108,25 +134,31 @@ public class BusinessIntelligenceController {
             int years = period.getYears();
             int months = period.getMonths();
             StringBuilder age = new StringBuilder();
-            if (years > 0) age.append(years).append(" Year").append(years > 1 ? "s" : "");
+            if (years > 0) {
+                age.append(years).append(" Year").append(years > 1 ? "s" : "");
+            }
             if (months > 0) {
-                if (age.length() > 0) age.append(", ");
+                if (years > 0) age.append(" ");
                 age.append(months).append(" Month").append(months > 1 ? "s" : "");
             }
-            return age.length() > 0 ? age.toString() : "Less than a month";
+            return age.length() > 0 ? age.toString() : "< 1 Month";
         } catch (Exception e) {
-            return "10+ Years";
+            return "Established Entity";
         }
     }
 
     @GetMapping("/ask")
-    public ResponseEntity<Map<String, Object>> queryBusinessIntelligence(@RequestParam("q") String query) {
-        log.info("Processing Admin BI Query: {}", query);
-        String q = query.toLowerCase().trim();
-
+    public ResponseEntity<Map<String, Object>> queryBusinessIntelligence(
+            @RequestParam("q") String query,
+            @RequestParam(value = "company", required = false) String company) {
+        log.info("Processing Admin BI Query: {} (Company Hint: {})", query, company);
         Map<String, Object> response = new HashMap<>();
-        response.put("query", query);
+        if (query == null || query.trim().isEmpty()) {
+            response.put("reply", "Please ask a question about your clients, documents, or company records.");
+            return ResponseEntity.ok(response);
+        }
 
+        String q = query.toLowerCase().trim();
         List<ClientDocument> allDocs = clientDocumentRepository.findAll();
 
         List<User> users = userRepository.findAll().stream()
@@ -143,11 +175,12 @@ public class BusinessIntelligenceController {
         int totalClientsCount = users.size() > 0 ? users.size() : 102;
         int totalServicesCount = requirements.size() > 0 ? requirements.size() : 102;
 
-        Requirement match = findMatchingRequirement(requirements, q);
+        Requirement match = findMatchingRequirement(requirements, q, company);
         Map<String, Object> data = match != null ? match.getData() : null;
         Map<String, Object> excel = data != null && data.get("excelData") instanceof Map ? (Map<String, Object>) data.get("excelData") : null;
         String compName = excel != null && excel.get("companyName") != null ? excel.get("companyName").toString() : (match != null ? match.getUserId() : "Selected Client Entity");
         String uen = excel != null && excel.get("uen") != null ? excel.get("uen").toString() : "N/A";
+        response.put("query", query);
 
         // 1. UEN Query
         if (q.contains("uen") || q.contains("unique entity number")) {
@@ -208,36 +241,125 @@ public class BusinessIntelligenceController {
             return ResponseEntity.ok(response);
         }
 
-        // 4.5 Nominee Director Appointment Document Generation Query
-        boolean isDocAppointmentQuery = (q.contains("appointment") || q.contains("appoinment")) &&
-                (q.contains("nominee") || q.contains("nominie") || q.contains("director")) &&
-                (q.contains("document") || q.contains("form") || q.contains("doc") || q.contains("give me") || q.contains("generate") || q.contains("create") || q.contains("show") || q.contains("get"));
+        // 4.4 Change of Registered Office Address Document Query
+        boolean isChangeOfAddressQuery = (q.contains("change of address") || q.contains("change address") || q.contains("registered office address") || (q.contains("address") && (q.contains("change") || q.contains("update") || q.contains("relocate") || q.contains("shift")))) &&
+                (q.contains("document") || q.contains("doc") || q.contains("resolution") || q.contains("driw") || q.contains("give me") || q.contains("get me") || q.contains("show me") || q.contains("prepare") || q.contains("generate"));
 
-        if (!isDocAppointmentQuery && (q.contains("form 45") || q.contains("form45") || q.contains("consent to act as director"))) {
-            isDocAppointmentQuery = true;
-        }
-
-        if (isDocAppointmentQuery) {
-            NomineeAppointmentDocumentData docData = documentGenerationService.createDocumentDataFromRequirement(match, query);
+        if (isChangeOfAddressQuery || q.equals("change of address") || q.equals("change address") || q.equals("driw change of address")) {
+            NomineeAppointmentDocumentData docData = documentGenerationService.createDocumentDataFromRequirement(match, query, "change_of_address");
 
             StringBuilder sb = new StringBuilder();
-            sb.append("📄 **Nominee Director Appointment Document (Form 45) Prepared**\n\n");
-            sb.append("The statutory Nominee Director Appointment document (ACRA Form 45) has been prepared for **").append(docData.getCompanyName()).append("**:\n\n");
+            sb.append("📍 **Change of Registered Office Address Resolution (DRIW) Prepared**\n\n");
+            sb.append("The Directors’ Resolution in Writing (DRIW) for change of registered office address has been prepared for **").append(docData.getCompanyName()).append("**:\n\n");
             sb.append("• **Company Name:** `").append(docData.getCompanyName()).append("`\n");
             sb.append("• **Company UEN:** `").append(docData.getUen()).append("`\n");
-            sb.append("• **Appointed Nominee Director:** `").append(docData.getNomineeName()).append("`\n");
-            sb.append("• **NRIC / ID Number:** `").append(docData.getNomineeIdNumber()).append("`\n");
-            sb.append("• **Effective Date:** `").append(docData.getEffectiveDate()).append("`\n\n");
+            sb.append("• **New Registered Address:** `").append(docData.getNewAddress() != null ? docData.getNewAddress() : docData.getCompanyAddress()).append("`\n");
+            sb.append("• **Authorised Secretarial Agent:** `Globalisor Pte. Ltd.` (ACRA Bizfile Lodgment)\n\n");
             sb.append("🔗 **Actions & Access:**\n");
-            sb.append("👉 [📄 Open & Edit Appointment Document (Form 45)](/admin/document-viewer.html?docId=").append(docData.getId()).append(")\n\n");
-            sb.append("👉 [⬇️ Download .DOCX Document](/api/admin/intelligence/document/").append(docData.getId()).append("/download)\n\n");
-            sb.append("💡 *Click the link above to view the ACRA Form 45 in a new tab, edit any details in real-time, and download or print the updated document.*");
+            sb.append("👉 [📄 Open & Edit Document (Change of Address)](/admin/document-viewer.html?docId=").append(docData.getId()).append("&type=change_of_address)\n\n");
+            sb.append("👉 [⬇️ Download .DOCX Document](/api/admin/intelligence/document/").append(docData.getId()).append("/download?type=change_of_address)\n\n");
+            sb.append("💡 *You can live-edit the new registered address, preview the resolution, print, or download the official .DOCX file.*");
 
             response.put("reply", sb.toString());
-            response.put("type", "nominee_director_appointment_document");
+            response.put("type", "change_of_address_document");
+            response.put("documentType", "change_of_address");
+            response.put("companyName", compName);
+            response.put("docCount", 1);
             response.put("docId", docData.getId());
-            response.put("viewUrl", "/admin/document-viewer.html?docId=" + docData.getId());
-            response.put("downloadUrl", "/api/admin/intelligence/document/" + docData.getId() + "/download");
+            response.put("viewUrl", "/admin/document-viewer.html?docId=" + docData.getId() + "&type=change_of_address");
+            response.put("downloadUrl", "/api/admin/intelligence/document/" + docData.getId() + "/download?type=change_of_address");
+            return ResponseEntity.ok(response);
+        }
+
+        // 4.5 Appointment Document Generation Query & Clarification Flow
+        boolean isAppointmentQuery = (q.contains("appointment") || q.contains("appoinment") || q.contains("appoint")) &&
+                (q.contains("director") || q.contains("nominee") || q.contains("nominie") || q.contains("document") || q.contains("doc") || q.contains("package"));
+
+        boolean isDocRequest = q.contains("document") || q.contains("doc") || q.contains("form 45") || q.contains("form45") ||
+                q.contains("give me") || q.contains("generate") || q.contains("show me") || q.contains("create") || q.contains("get me");
+
+        boolean isDirectDirectorSelection = q.equals("director") || q.equals("regular director") || q.equals("option 1") || q.equals("1") ||
+                q.equals("appointment of director") || q.equals("director appointment") || q.equals("director document") ||
+                (q.contains("director") && !q.contains("nominee") && !q.contains("nominie") && (q.startsWith("director") || q.contains("only director") || q.contains("standard director")));
+
+        boolean isDirectNomineeSelection = q.equals("nominee director") || q.equals("nominee") || q.equals("nominie") || q.equals("nominie director") ||
+                q.equals("option 2") || q.equals("2") || q.equals("appointment of nominee director") || q.equals("nominee director appointment") ||
+                q.equals("nominee director document") || (q.contains("nominee") && (q.startsWith("nominee") || q.startsWith("nominie") || q.contains("only nominee") || q.contains("selected nominee")));
+
+        if (isDirectDirectorSelection || isDirectNomineeSelection) {
+            String selectedType = isDirectDirectorSelection ? "director" : "nominee_director";
+            NomineeAppointmentDocumentData docData = documentGenerationService.createDocumentDataFromRequirement(match, query, selectedType);
+
+            StringBuilder sb = new StringBuilder();
+            if ("director".equals(selectedType)) {
+                sb.append("📄 **Director Appointment Document Package Prepared (2 Documents)**\n\n");
+                sb.append("The statutory appointment documents have been prepared for **").append(docData.getCompanyName()).append("**:\n\n");
+                sb.append("1. **Directors’ Resolution in Writing (DRIW)** — Pursuant to Constitution of the Company\n");
+                sb.append("2. **ACRA Form 45** — Consent to Act as Director & Statement of Non-Disqualification\n\n");
+                sb.append("• **Company Name:** `").append(docData.getCompanyName()).append("`\n");
+                sb.append("• **Company UEN:** `").append(docData.getUen()).append("`\n");
+                sb.append("• **Appointed Director:** `").append(docData.getNomineeName()).append("`\n");
+                sb.append("• **NRIC / Passport:** `").append(docData.getNomineeIdNumber()).append("`\n");
+                sb.append("• **Effective Date:** `").append(docData.getEffectiveDate()).append("`\n\n");
+                sb.append("🔗 **Actions & Access:**\n");
+                sb.append("👉 [📄 Open & Edit Documents (Single Document View)](/admin/document-viewer.html?docId=").append(docData.getId()).append("&type=director)\n\n");
+                sb.append("👉 [⬇️ Download .DOCX Document Package](/api/admin/intelligence/document/").append(docData.getId()).append("/download?type=director)\n\n");
+                sb.append("💡 *All 2 documents are rendered sequentially in continuous pagination. You can live-edit, preview, print, or download the merged package.*");
+
+                response.put("reply", sb.toString());
+                response.put("type", "director_appointment_document");
+                response.put("documentType", "director");
+                response.put("docCount", 2);
+            } else {
+                sb.append("📄 **Nominee Director Appointment Document Package Prepared (3 Documents)**\n\n");
+                sb.append("The statutory appointment documents have been prepared for **").append(docData.getCompanyName()).append("**:\n\n");
+                sb.append("1. **Directors’ Resolution in Writing (DRIW)** — Pursuant to Constitution of the Company\n");
+                sb.append("2. **ACRA Form 45** — Consent to Act as Nominee Director (Arranged by CSP)\n");
+                sb.append("3. **Nominee Director Confirmation Letter** — Particulars of Nominator to Board of Directors\n\n");
+                sb.append("• **Company Name:** `").append(docData.getCompanyName()).append("`\n");
+                sb.append("• **Company UEN:** `").append(docData.getUen()).append("`\n");
+                sb.append("• **Appointed Nominee Director:** `").append(docData.getNomineeName()).append("`\n");
+                sb.append("• **NRIC / ID Number:** `").append(docData.getNomineeIdNumber()).append("`\n");
+                sb.append("• **Nominator:** `").append(docData.getNominatorName()).append("`\n");
+                sb.append("• **Effective Date:** `").append(docData.getEffectiveDate()).append("`\n\n");
+                sb.append("🔗 **Actions & Access:**\n");
+                sb.append("👉 [📄 Open & Edit Documents (Single Document View)](/admin/document-viewer.html?docId=").append(docData.getId()).append("&type=nominee_director)\n\n");
+                sb.append("👉 [⬇️ Download .DOCX Document Package](/api/admin/intelligence/document/").append(docData.getId()).append("/download?type=nominee_director)\n\n");
+                sb.append("💡 *All 3 documents are rendered sequentially in continuous pagination. You can live-edit, preview, print, or download the merged package.*");
+
+                response.put("reply", sb.toString());
+                response.put("type", "nominee_director_appointment_document");
+                response.put("documentType", "nominee_director");
+                response.put("docCount", 3);
+            }
+
+            response.put("docId", docData.getId());
+            response.put("viewUrl", "/admin/document-viewer.html?docId=" + docData.getId() + "&type=" + selectedType);
+            response.put("downloadUrl", "/api/admin/intelligence/document/" + docData.getId() + "/download?type=" + selectedType);
+            return ResponseEntity.ok(response);
+        }
+
+        // Clarification prompt when user asks for appointment / director documents
+        if ((isAppointmentQuery && isDocRequest) || (q.contains("document") && (q.contains("director") || q.contains("nominee") || q.contains("nominie"))) ||
+                (q.contains("give me") && (q.contains("director") || q.contains("nominee") || q.contains("nominie"))) ||
+                (q.contains("form 45") || q.contains("form45") || q.contains("consent to act as director"))) {
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("❓ **Director or nominee director?**\n\n");
+            sb.append("Please specify which document set you would like to prepare for **").append(compName).append("**:\n\n");
+            sb.append("1️⃣ **👔 Director** (Standard Director Appointment — 2 Documents)\n");
+            sb.append("   • *Directors’ Resolution in Writing (DRIW)*\n");
+            sb.append("   • *ACRA Form 45 (Consent to Act as Director)*\n\n");
+            sb.append("2️⃣ **🏛️ Nominee Director** (Nominee Director Appointment — 3 Documents)\n");
+            sb.append("   • *Directors’ Resolution in Writing (DRIW)*\n");
+            sb.append("   • *ACRA Form 45 (Consent to Act as Nominee Director)*\n");
+            sb.append("   • *Nominee Director Confirmation Letter to Board of Directors*\n\n");
+            sb.append("👉 *Please click one of the options below or reply with **Director** or **Nominee Director**.*");
+
+            response.put("reply", sb.toString());
+            response.put("type", "appointment_clarification");
+            response.put("options", List.of("Director", "Nominee Director"));
+            response.put("companyName", compName);
             return ResponseEntity.ok(response);
         }
 
@@ -501,18 +623,29 @@ public class BusinessIntelligenceController {
     }
 
     @GetMapping("/document/{docId}/download")
-    public ResponseEntity<byte[]> downloadDocument(@PathVariable("docId") String docId) {
+    public ResponseEntity<byte[]> downloadDocument(@PathVariable("docId") String docId, @RequestParam(value = "type", required = false) String type) {
         try {
             NomineeAppointmentDocumentData doc = documentGenerationService.getDocumentData(docId);
             if (doc == null) {
                 Requirement req = requirementRepository.findAll().stream().findFirst().orElse(null);
-                doc = documentGenerationService.createDocumentDataFromRequirement(req, "default");
+                doc = documentGenerationService.createDocumentDataFromRequirement(req, "default", type != null ? type : "nominee_director");
+                doc.setId(docId);
+            } else if (type != null && !type.isEmpty()) {
+                doc.setDocumentType(type);
             }
             byte[] bytes = documentGenerationService.generateDocxBytes(doc);
             String safeName = doc.getCompanyName().replaceAll("[^a-zA-Z0-9.-]", "_");
+            String prefix;
+            if ("change_of_address".equalsIgnoreCase(doc.getDocumentType())) {
+                prefix = "Change-of-Address-DRIW-";
+            } else if ("director".equalsIgnoreCase(doc.getDocumentType())) {
+                prefix = "Director-Appointment-";
+            } else {
+                prefix = "Nominee-Director-Appointment-";
+            }
 
             return ResponseEntity.ok()
-                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"Nominee-Director-Appointment-" + safeName + ".docx\"")
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + prefix + safeName + ".docx\"")
                     .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
                     .body(bytes);
         } catch (Exception e) {

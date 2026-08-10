@@ -19,8 +19,6 @@ import org.springframework.http.ResponseEntity;
 import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 
 @ExtendWith(MockitoExtension.class)
 public class BusinessIntelligenceControllerDocTest {
@@ -44,7 +42,52 @@ public class BusinessIntelligenceControllerDocTest {
     private BusinessIntelligenceController controller;
 
     @Test
-    public void testQueryAppointmentDocument() {
+    public void testQueryAppointmentClarification() {
+        Requirement reqAbbey = new Requirement();
+        Map<String, Object> dataAbbey = new HashMap<>();
+        Map<String, Object> excelAbbey = new HashMap<>();
+        excelAbbey.put("companyName", "ABBEY HOLDINGS PTE. LTD.");
+        excelAbbey.put("uen", "201601260K");
+        dataAbbey.put("excelData", excelAbbey);
+        reqAbbey.setData(dataAbbey);
+
+        Requirement req3B = new Requirement();
+        Map<String, Object> data3B = new HashMap<>();
+        Map<String, Object> excel3B = new HashMap<>();
+        excel3B.put("companyName", "3B TRADING & CONSULTING PTE. LTD.");
+        excel3B.put("uen", "202012345A");
+        data3B.put("excelData", excel3B);
+        req3B.setData(data3B);
+
+        Mockito.when(requirementRepository.findAll()).thenReturn(List.of(reqAbbey, req3B));
+        Mockito.when(userRepository.findAll()).thenReturn(Collections.emptyList());
+        Mockito.when(clientDocumentRepository.findAll()).thenReturn(Collections.emptyList());
+
+        // 1. Clarification with 3B Trading in query
+        String query = "give me document of nominiee director 3B trading";
+        ResponseEntity<Map<String, Object>> response = controller.queryBusinessIntelligence(query, null);
+
+        assertNotNull(response);
+        assertEquals(200, response.getStatusCode().value());
+
+        Map<String, Object> body = response.getBody();
+        assertNotNull(body);
+        assertEquals("appointment_clarification", body.get("type"));
+        assertTrue(body.get("reply").toString().contains("Director or nominee director?"));
+        assertTrue(body.get("reply").toString().contains("3B TRADING & CONSULTING"));
+        assertEquals("3B TRADING & CONSULTING PTE. LTD.", body.get("companyName"));
+
+        // 2. User subsequently selects "Director" with company context preserved
+        ResponseEntity<Map<String, Object>> dirResponse = controller.queryBusinessIntelligence("director", "3B TRADING & CONSULTING PTE. LTD.");
+        assertNotNull(dirResponse);
+        Map<String, Object> dirBody = dirResponse.getBody();
+        assertNotNull(dirBody);
+        assertEquals("director_appointment_document", dirBody.get("type"));
+        assertTrue(dirBody.get("reply").toString().contains("3B TRADING & CONSULTING"));
+    }
+
+    @Test
+    public void testQueryDirectDirectorSelection() {
         Requirement req = new Requirement();
         Map<String, Object> data = new HashMap<>();
         Map<String, Object> excel = new HashMap<>();
@@ -57,8 +100,39 @@ public class BusinessIntelligenceControllerDocTest {
         Mockito.when(userRepository.findAll()).thenReturn(Collections.emptyList());
         Mockito.when(clientDocumentRepository.findAll()).thenReturn(Collections.emptyList());
 
-        String query = "give me a document of appointment of nominee director for Abbey Holdings";
-        ResponseEntity<Map<String, Object>> response = controller.queryBusinessIntelligence(query);
+        String query = "director";
+        ResponseEntity<Map<String, Object>> response = controller.queryBusinessIntelligence(query, null);
+
+        assertNotNull(response);
+        assertEquals(200, response.getStatusCode().value());
+
+        Map<String, Object> body = response.getBody();
+        assertNotNull(body);
+        assertEquals("director_appointment_document", body.get("type"));
+        assertEquals("director", body.get("documentType"));
+        assertEquals(2, body.get("docCount"));
+        assertNotNull(body.get("docId"));
+        assertTrue(body.get("viewUrl").toString().contains("type=director"));
+        assertTrue(body.get("downloadUrl").toString().contains("type=director"));
+        assertTrue(body.get("reply").toString().contains("Director Appointment Document Package Prepared (2 Documents)"));
+    }
+
+    @Test
+    public void testQueryDirectNomineeSelection() {
+        Requirement req = new Requirement();
+        Map<String, Object> data = new HashMap<>();
+        Map<String, Object> excel = new HashMap<>();
+        excel.put("companyName", "ABBEY HOLDINGS PTE. LTD.");
+        excel.put("uen", "201601260K");
+        data.put("excelData", excel);
+        req.setData(data);
+
+        Mockito.when(requirementRepository.findAll()).thenReturn(List.of(req));
+        Mockito.when(userRepository.findAll()).thenReturn(Collections.emptyList());
+        Mockito.when(clientDocumentRepository.findAll()).thenReturn(Collections.emptyList());
+
+        String query = "nominee director";
+        ResponseEntity<Map<String, Object>> response = controller.queryBusinessIntelligence(query, null);
 
         assertNotNull(response);
         assertEquals(200, response.getStatusCode().value());
@@ -66,11 +140,12 @@ public class BusinessIntelligenceControllerDocTest {
         Map<String, Object> body = response.getBody();
         assertNotNull(body);
         assertEquals("nominee_director_appointment_document", body.get("type"));
+        assertEquals("nominee_director", body.get("documentType"));
+        assertEquals(3, body.get("docCount"));
         assertNotNull(body.get("docId"));
-        assertNotNull(body.get("viewUrl"));
-        assertNotNull(body.get("downloadUrl"));
-        assertTrue(body.get("reply").toString().contains("Nominee Director Appointment Document (Form 45) Prepared"));
-        assertTrue(body.get("reply").toString().contains("ABBEY HOLDINGS"));
+        assertTrue(body.get("viewUrl").toString().contains("type=nominee_director"));
+        assertTrue(body.get("downloadUrl").toString().contains("type=nominee_director"));
+        assertTrue(body.get("reply").toString().contains("Nominee Director Appointment Document Package Prepared (3 Documents)"));
     }
 
     @Test
@@ -92,11 +167,54 @@ public class BusinessIntelligenceControllerDocTest {
         assertEquals(200, updateRes.getStatusCode().value());
 
         // 3. GET /download
-        ResponseEntity<byte[]> downloadRes = controller.downloadDocument(docId);
+        ResponseEntity<byte[]> downloadRes = controller.downloadDocument(docId, "nominee_director");
         assertNotNull(downloadRes);
         assertEquals(200, downloadRes.getStatusCode().value());
         assertNotNull(downloadRes.getBody());
         assertTrue(downloadRes.getBody().length > 0);
         assertTrue(downloadRes.getHeaders().getContentDisposition().toString().contains("Nominee-Director-Appointment"));
     }
+
+    @Test
+    public void testQueryChangeOfAddressDocument() {
+        Requirement req = new Requirement();
+        Map<String, Object> data = new HashMap<>();
+        Map<String, Object> excel = new HashMap<>();
+        excel.put("companyName", "3B TRADING & CONSULTING PTE. LTD.");
+        excel.put("uen", "202012345A");
+        excel.put("address", "1 RAFFLES PLACE, #20-00, SINGAPORE 048616");
+        data.put("excelData", excel);
+        req.setData(data);
+
+        Mockito.when(requirementRepository.findAll()).thenReturn(List.of(req));
+        Mockito.when(userRepository.findAll()).thenReturn(Collections.emptyList());
+        Mockito.when(clientDocumentRepository.findAll()).thenReturn(Collections.emptyList());
+
+        String query = "give me document of change of address for 3B Trading";
+        ResponseEntity<Map<String, Object>> response = controller.queryBusinessIntelligence(query, null);
+
+        assertNotNull(response);
+        assertEquals(200, response.getStatusCode().value());
+
+        Map<String, Object> body = response.getBody();
+        assertNotNull(body);
+        assertEquals("change_of_address_document", body.get("type"));
+        assertEquals("change_of_address", body.get("documentType"));
+        assertEquals(1, body.get("docCount"));
+        assertNotNull(body.get("docId"));
+        assertTrue(body.get("viewUrl").toString().contains("type=change_of_address"));
+        assertTrue(body.get("downloadUrl").toString().contains("type=change_of_address"));
+        assertTrue(body.get("reply").toString().contains("Change of Registered Office Address Resolution (DRIW) Prepared"));
+        assertTrue(body.get("reply").toString().contains("3B TRADING & CONSULTING"));
+
+        // Test downloading the generated change of address document
+        String docId = body.get("docId").toString();
+        ResponseEntity<byte[]> downloadRes = controller.downloadDocument(docId, "change_of_address");
+        assertNotNull(downloadRes);
+        assertEquals(200, downloadRes.getStatusCode().value());
+        assertNotNull(downloadRes.getBody());
+        assertTrue(downloadRes.getBody().length > 0);
+        assertTrue(downloadRes.getHeaders().getContentDisposition().toString().contains("Change-of-Address-DRIW-"));
+    }
 }
+
