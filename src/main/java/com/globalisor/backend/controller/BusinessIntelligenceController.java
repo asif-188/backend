@@ -1,8 +1,10 @@
 package com.globalisor.backend.controller;
 
+import com.globalisor.backend.model.ChatThread;
 import com.globalisor.backend.model.ClientDocument;
 import com.globalisor.backend.model.Requirement;
 import com.globalisor.backend.model.User;
+import com.globalisor.backend.repository.ChatThreadRepository;
 import com.globalisor.backend.repository.ClientDocumentRepository;
 import com.globalisor.backend.repository.OnboardingRepository;
 import com.globalisor.backend.repository.RequirementRepository;
@@ -43,10 +45,74 @@ public class BusinessIntelligenceController {
     @Autowired
     private DocumentGenerationService documentGenerationService;
 
+    @Autowired
+    private ChatThreadRepository chatThreadRepository;
+
+    /**
+     * Entity resolution priority:
+     * 1. Check if the query 'q' contains an explicit company name, keyword, or UEN.
+     * 2. If 'q' does not contain any company, fallback to companyHint from thread memory.
+     * 3. Fallback to first available requirement.
+     */
     private Requirement findMatchingRequirement(List<Requirement> reqs, String q, String companyHint) {
         if (reqs == null || reqs.isEmpty()) return null;
 
-        // 0. Match companyHint if provided
+        String cleanQ = q != null ? q.toLowerCase().trim() : "";
+
+        // 1. Direct name or UEN match from query string 'q' (Highest priority: new entity mentioned by user)
+        if (!cleanQ.isEmpty()) {
+            for (Requirement r : reqs) {
+                Map<String, Object> data = r.getData();
+                if (data == null) continue;
+                Object excelObj = data.get("excelData");
+                if (excelObj instanceof Map) {
+                    Map<?, ?> excel = (Map<?, ?>) excelObj;
+                    Object cNameObj = excel.get("companyName");
+                    Object uenObj = excel.get("uen");
+                    if (cNameObj != null) {
+                        String rawName = cNameObj.toString().toLowerCase().trim();
+                        String cName = rawName.replace("pte. ltd.", "").replace("pte ltd", "").replace("pte.", "").trim();
+                        if (!cName.isEmpty() && (cleanQ.contains(rawName) || cleanQ.contains(cName))) {
+                            return r;
+                        }
+                    }
+                    if (uenObj != null) {
+                        String uen = uenObj.toString().toLowerCase().trim();
+                        if (!uen.isEmpty() && cleanQ.contains(uen)) {
+                            return r;
+                        }
+                    }
+                }
+                if (r.getUserId() != null && cleanQ.contains(r.getUserId().toLowerCase())) {
+                    return r;
+                }
+            }
+
+            // Keyword match in 'q' (e.g. "abbey", "3b", "greenbridge") - strictly match whole words and ignore common stopwords
+            Set<String> stopwords = Set.of("pte", "ltd", "inc", "and", "the", "to", "of", "in", "on", "at", "by", "for", "with", "from", "as", "is", "it", "an", "or", "so", "be", "do", "co", "all");
+            for (Requirement r : reqs) {
+                Map<String, Object> data = r.getData();
+                if (data == null) continue;
+                Object excelObj = data.get("excelData");
+                if (excelObj instanceof Map) {
+                    Map<?, ?> excel = (Map<?, ?>) excelObj;
+                    Object cNameObj = excel.get("companyName");
+                    if (cNameObj != null) {
+                        String[] words = cNameObj.toString().toLowerCase().replaceAll("[^a-z0-9\\s]", " ").split("\\s+");
+                        for (String w : words) {
+                            if (w.length() >= 3 && !stopwords.contains(w)) {
+                                // Match as whole word in cleanQ
+                                if (cleanQ.matches(".*\\b" + java.util.regex.Pattern.quote(w) + "\\b.*")) {
+                                    return r;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Context memory fallback: If query did NOT mention any company, match companyHint from thread memory
         if (companyHint != null && !companyHint.trim().isEmpty()) {
             String cleanHint = companyHint.toLowerCase().trim();
             for (Requirement r : reqs) {
@@ -66,55 +132,6 @@ public class BusinessIntelligenceController {
                 }
                 if (r.getUserId() != null && r.getUserId().equalsIgnoreCase(companyHint.trim())) {
                     return r;
-                }
-            }
-        }
-
-        if (q == null) return reqs.get(0);
-        String cleanQ = q.toLowerCase();
-
-        // 1. Direct name or UEN match
-        for (Requirement r : reqs) {
-            Map<String, Object> data = r.getData();
-            if (data == null) continue;
-            Object excelObj = data.get("excelData");
-            if (excelObj instanceof Map) {
-                Map<?, ?> excel = (Map<?, ?>) excelObj;
-                Object cNameObj = excel.get("companyName");
-                Object uenObj = excel.get("uen");
-                if (cNameObj != null) {
-                    String cName = cNameObj.toString().toLowerCase().replace("pte. ltd.", "").replace("pte ltd", "").trim();
-                    if (!cName.isEmpty() && cleanQ.contains(cName)) {
-                        return r;
-                    }
-                }
-                if (uenObj != null) {
-                    String uen = uenObj.toString().toLowerCase().trim();
-                    if (!uen.isEmpty() && cleanQ.contains(uen)) {
-                        return r;
-                    }
-                }
-            }
-            if (r.getUserId() != null && cleanQ.contains(r.getUserId().toLowerCase())) {
-                return r;
-            }
-        }
-
-        // 2. Keyword match (abbey, 3b, trading, etc.)
-        for (Requirement r : reqs) {
-            Map<String, Object> data = r.getData();
-            if (data == null) continue;
-            Object excelObj = data.get("excelData");
-            if (excelObj instanceof Map) {
-                Map<?, ?> excel = (Map<?, ?>) excelObj;
-                Object cNameObj = excel.get("companyName");
-                if (cNameObj != null) {
-                    String[] words = cNameObj.toString().toLowerCase().split("\\s+");
-                    for (String w : words) {
-                        if (w.length() >= 2 && !w.equals("pte") && !w.equals("ltd") && !w.equals("inc") && !w.equals("and") && cleanQ.contains(w)) {
-                            return r;
-                        }
-                    }
                 }
             }
         }
@@ -147,16 +164,120 @@ public class BusinessIntelligenceController {
         }
     }
 
+    // --- Thread Management Endpoints ---
+
+    @GetMapping("/threads")
+    public ResponseEntity<List<ChatThread>> listThreads(@RequestParam(value = "userId", defaultValue = "admin") String userId) {
+        List<ChatThread> threads = chatThreadRepository.findByUserIdOrderByUpdatedAtDesc(userId);
+        if (threads.isEmpty()) {
+            // Seed a default thread
+            ChatThread defaultThread = new ChatThread();
+            defaultThread.setId("th_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12));
+            defaultThread.setUserId(userId);
+            defaultThread.setTitle("General BI Inquiry");
+            defaultThread.setActiveCompany("ABBEY HOLDINGS PTE. LTD.");
+            defaultThread.setActiveUen("201601260K");
+            defaultThread.setCreatedAt(new Date());
+            defaultThread.setUpdatedAt(new Date());
+            ChatThread saved = chatThreadRepository.save(defaultThread);
+            threads = List.of(saved);
+        }
+        return ResponseEntity.ok(threads);
+    }
+
+    @PostMapping("/threads")
+    public ResponseEntity<ChatThread> createThread(@RequestBody(required = false) Map<String, String> body) {
+        String userId = body != null && body.containsKey("userId") ? body.get("userId") : "admin";
+        String title = body != null && body.containsKey("title") ? body.get("title") : "New Conversation";
+        String company = body != null && body.containsKey("company") ? body.get("company") : null;
+
+        ChatThread thread = new ChatThread();
+        thread.setId("th_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12));
+        thread.setUserId(userId);
+        thread.setTitle(title);
+        thread.setActiveCompany(company);
+        thread.setCreatedAt(new Date());
+        thread.setUpdatedAt(new Date());
+
+        ChatThread saved = chatThreadRepository.save(thread);
+        log.info("Created new ChatThread: id={}, title={}", saved.getId(), saved.getTitle());
+        return ResponseEntity.ok(saved);
+    }
+
+    @GetMapping("/threads/{threadId}")
+    public ResponseEntity<ChatThread> getThread(@PathVariable("threadId") String threadId) {
+        return chatThreadRepository.findById(threadId)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).build());
+    }
+
+    @DeleteMapping("/threads/{threadId}")
+    public ResponseEntity<Map<String, Object>> deleteThread(@PathVariable("threadId") String threadId) {
+        chatThreadRepository.deleteById(threadId);
+        Map<String, Object> res = new HashMap<>();
+        res.put("status", "success");
+        res.put("message", "Thread deleted successfully");
+        return ResponseEntity.ok(res);
+    }
+
+    @PutMapping("/threads/{threadId}/context")
+    public ResponseEntity<ChatThread> updateThreadContext(@PathVariable("threadId") String threadId, @RequestBody Map<String, String> body) {
+        ChatThread thread = chatThreadRepository.findById(threadId).orElse(null);
+        if (thread == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+        }
+        if (body.containsKey("company")) {
+            thread.setActiveCompany(body.get("company"));
+        }
+        if (body.containsKey("uen")) {
+            thread.setActiveUen(body.get("uen"));
+        }
+        if (body.containsKey("title")) {
+            thread.setTitle(body.get("title"));
+        }
+        thread.setUpdatedAt(new Date());
+        ChatThread saved = chatThreadRepository.save(thread);
+        return ResponseEntity.ok(saved);
+    }
+
+    // --- Main Query & Context Resolution ---
+
     @GetMapping("/ask")
     public ResponseEntity<Map<String, Object>> queryBusinessIntelligence(
             @RequestParam("q") String query,
-            @RequestParam(value = "company", required = false) String company) {
-        log.info("Processing Admin BI Query: {} (Company Hint: {})", query, company);
+            @RequestParam(value = "company", required = false) String company,
+            @RequestParam(value = "threadId", required = false) String threadId,
+            @RequestParam(value = "userId", defaultValue = "admin") String userId) {
+
+        log.info("Processing BI Query: '{}' (Company Param: {}, Thread ID: {})", query, company, threadId);
         Map<String, Object> response = new HashMap<>();
+
         if (query == null || query.trim().isEmpty()) {
             response.put("reply", "Please ask a question about your clients, documents, or company records.");
             return ResponseEntity.ok(response);
         }
+
+        // Retrieve or create thread
+        ChatThread thread = null;
+        if (threadId != null && !threadId.trim().isEmpty()) {
+            thread = chatThreadRepository.findById(threadId.trim()).orElse(null);
+        }
+        if (thread == null) {
+            List<ChatThread> existing = chatThreadRepository.findByUserIdOrderByUpdatedAtDesc(userId);
+            if (!existing.isEmpty() && (threadId == null || threadId.trim().isEmpty())) {
+                thread = existing.get(0);
+            } else {
+                thread = new ChatThread();
+                thread.setId(threadId != null && !threadId.trim().isEmpty() ? threadId.trim() : ("th_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12)));
+                thread.setUserId(userId);
+                thread.setTitle("New Conversation");
+                thread.setCreatedAt(new Date());
+                thread.setUpdatedAt(new Date());
+            }
+        }
+
+        // Context hint priority: explicit param > thread activeCompany
+        String effectiveCompanyHint = (company != null && !company.trim().isEmpty()) ? company.trim() : thread.getActiveCompany();
 
         String q = query.toLowerCase().trim();
         List<ClientDocument> allDocs = clientDocumentRepository.findAll();
@@ -172,15 +293,29 @@ public class BusinessIntelligenceController {
 
         List<Requirement> requirements = requirementRepository.findAll();
 
-        int totalClientsCount = users.size() > 0 ? users.size() : 102;
-        int totalServicesCount = requirements.size() > 0 ? requirements.size() : 102;
-
-        Requirement match = findMatchingRequirement(requirements, q, company);
+        Requirement match = findMatchingRequirement(requirements, q, effectiveCompanyHint);
         Map<String, Object> data = match != null ? match.getData() : null;
         Map<String, Object> excel = data != null && data.get("excelData") instanceof Map ? (Map<String, Object>) data.get("excelData") : null;
         String compName = excel != null && excel.get("companyName") != null ? excel.get("companyName").toString() : (match != null ? match.getUserId() : "Selected Client Entity");
         String uen = excel != null && excel.get("uen") != null ? excel.get("uen").toString() : "N/A";
+
+        // Update active company in thread memory
+        thread.setActiveCompany(compName);
+        thread.setActiveUen(uen);
+
         response.put("query", query);
+        response.put("threadId", thread.getId());
+        response.put("activeCompany", compName);
+        response.put("companyName", compName);
+        response.put("uen", uen);
+
+        String replyText = "";
+        String replyType = "general";
+        List<String> options = null;
+        String docId = null;
+        String viewUrl = null;
+        String downloadUrl = null;
+        Integer docCount = null;
 
         // 1. UEN Query
         if (q.contains("uen") || q.contains("unique entity number")) {
@@ -189,13 +324,11 @@ public class BusinessIntelligenceController {
             sb.append("• **Company Name:** ").append(compName).append("\n");
             sb.append("• **UEN:** `").append(uen).append("`\n");
             sb.append("• **Status:** Active / Registered with ACRA Singapore\n");
-            response.put("reply", sb.toString());
-            response.put("type", "uen_query");
-            return ResponseEntity.ok(response);
+            replyText = sb.toString();
+            replyType = "uen_query";
         }
-
         // 2. Company Type & Liability Structure Query
-        if (q.contains("type") || q.contains("exempt") || q.contains("private limited") || q.contains("liability") || q.contains("structure")) {
+        else if (q.contains("type") || q.contains("exempt") || q.contains("private limited") || q.contains("liability") || q.contains("structure")) {
             String compType = excel != null && excel.get("companyType") != null ? excel.get("companyType").toString() : "Private Company Limited by shares";
             StringBuilder sb = new StringBuilder();
             sb.append("🏢 **Company Type & Liability Structure**\n\n");
@@ -203,13 +336,11 @@ public class BusinessIntelligenceController {
             sb.append("• **Company Type:** `").append(compType).append("`\n");
             sb.append("• **Category:** `Exempt Private Company` (fewer than 20 individual shareholders)\n");
             sb.append("• **Liability Structure:** `Limited by Shares` (Shareholders' financial liability is strictly limited to the nominal value of their shares).\n");
-            response.put("reply", sb.toString());
-            response.put("type", "company_type_query");
-            return ResponseEntity.ok(response);
+            replyText = sb.toString();
+            replyType = "company_type_query";
         }
-
         // 3. Incorporation Date & Age Query
-        if (q.contains("incorporat") || q.contains("age") || q.contains("how old") || (q.contains("when") && q.contains("company"))) {
+        else if (q.contains("incorporat") || q.contains("age") || q.contains("how old") || (q.contains("when") && q.contains("company"))) {
             String incDateStr = excel != null && excel.get("incorporationDate") != null ? excel.get("incorporationDate").toString() :
                     (excel != null && excel.get("dateOfIncorporation") != null ? excel.get("dateOfIncorporation").toString() : "2016-01-26");
             String age = calculateAge(incDateStr);
@@ -219,13 +350,11 @@ public class BusinessIntelligenceController {
             sb.append("• **Incorporation Date:** `").append(incDateStr).append("`\n");
             sb.append("• **Current Age:** `").append(age).append("`\n");
             sb.append("• **Jurisdiction:** `Singapore`\n");
-            response.put("reply", sb.toString());
-            response.put("type", "incorporation_age_query");
-            return ResponseEntity.ok(response);
+            replyText = sb.toString();
+            replyType = "incorporation_age_query";
         }
-
         // 4. Profile Completion & Editing Query
-        if (q.contains("completion") || q.contains("profile status") || q.contains("where can i edit") || q.contains("edit profile") || (q.contains("edit") && q.contains("detail"))) {
+        else if (q.contains("completion") || q.contains("profile status") || q.contains("where can i edit") || q.contains("edit profile") || (q.contains("edit") && q.contains("detail"))) {
             StringBuilder sb = new StringBuilder();
             sb.append("📋 **Profile Completion & Corporate Editing**\n\n");
             sb.append("• **Company Name:** ").append(compName).append("\n");
@@ -236,16 +365,14 @@ public class BusinessIntelligenceController {
             sb.append("2. **Directors Tab**: Add/edit directors, appointment dates, ID & contact details.\n");
             sb.append("3. **Secretaries Tab**: Manage company secretary details and appointments.\n");
             sb.append("4. **Shareholders Tab**: Manage capital shareholdings, share classes, and personal info.\n");
-            response.put("reply", sb.toString());
-            response.put("type", "profile_completion_query");
-            return ResponseEntity.ok(response);
+            replyText = sb.toString();
+            replyType = "profile_completion_query";
         }
-
         // 4.4 Change of Registered Office Address Document Query
-        boolean isChangeOfAddressQuery = (q.contains("change of address") || q.contains("change address") || q.contains("registered office address") || (q.contains("address") && (q.contains("change") || q.contains("update") || q.contains("relocate") || q.contains("shift")))) &&
-                (q.contains("document") || q.contains("doc") || q.contains("resolution") || q.contains("driw") || q.contains("give me") || q.contains("get me") || q.contains("show me") || q.contains("prepare") || q.contains("generate"));
+        else if (((q.contains("change of address") || q.contains("change address") || q.contains("registered office address") || (q.contains("address") && (q.contains("change") || q.contains("update") || q.contains("relocate") || q.contains("shift")))) &&
+                (q.contains("document") || q.contains("doc") || q.contains("resolution") || q.contains("driw") || q.contains("give me") || q.contains("get me") || q.contains("show me") || q.contains("prepare") || q.contains("generate")))
+                || q.equals("change of address") || q.equals("change address") || q.equals("driw change of address")) {
 
-        if (isChangeOfAddressQuery || q.equals("change of address") || q.equals("change address") || q.equals("driw change of address")) {
             NomineeAppointmentDocumentData docData = documentGenerationService.createDocumentDataFromRequirement(match, query, "change_of_address");
 
             StringBuilder sb = new StringBuilder();
@@ -260,34 +387,27 @@ public class BusinessIntelligenceController {
             sb.append("👉 [⬇️ Download .DOCX Document](/api/admin/intelligence/document/").append(docData.getId()).append("/download?type=change_of_address)\n\n");
             sb.append("💡 *You can live-edit the new registered address, preview the resolution, print, or download the official .DOCX file.*");
 
-            response.put("reply", sb.toString());
-            response.put("type", "change_of_address_document");
+            replyText = sb.toString();
+            replyType = "change_of_address_document";
+            docId = docData.getId();
+            viewUrl = "/admin/document-viewer.html?docId=" + docData.getId() + "&type=change_of_address";
+            downloadUrl = "/api/admin/intelligence/document/" + docData.getId() + "/download?type=change_of_address";
+            docCount = 1;
             response.put("documentType", "change_of_address");
-            response.put("companyName", compName);
-            response.put("docCount", 1);
-            response.put("docId", docData.getId());
-            response.put("viewUrl", "/admin/document-viewer.html?docId=" + docData.getId() + "&type=change_of_address");
-            response.put("downloadUrl", "/api/admin/intelligence/document/" + docData.getId() + "/download?type=change_of_address");
-            return ResponseEntity.ok(response);
         }
-
         // 4.5 Appointment Document Generation Query & Clarification Flow
-        boolean isAppointmentQuery = (q.contains("appointment") || q.contains("appoinment") || q.contains("appoint")) &&
-                (q.contains("director") || q.contains("nominee") || q.contains("nominie") || q.contains("document") || q.contains("doc") || q.contains("package"));
-
-        boolean isDocRequest = q.contains("document") || q.contains("doc") || q.contains("form 45") || q.contains("form45") ||
-                q.contains("give me") || q.contains("generate") || q.contains("show me") || q.contains("create") || q.contains("get me");
-
-        boolean isDirectDirectorSelection = q.equals("director") || q.equals("regular director") || q.equals("option 1") || q.equals("1") ||
+        else if (q.equals("director") || q.equals("regular director") || q.equals("option 1") || q.equals("1") ||
                 q.equals("appointment of director") || q.equals("director appointment") || q.equals("director document") ||
-                (q.contains("director") && !q.contains("nominee") && !q.contains("nominie") && (q.startsWith("director") || q.contains("only director") || q.contains("standard director")));
-
-        boolean isDirectNomineeSelection = q.equals("nominee director") || q.equals("nominee") || q.equals("nominie") || q.equals("nominie director") ||
+                (q.contains("director") && !q.contains("nominee") && !q.contains("nominie") && (q.startsWith("director") || q.contains("only director") || q.contains("standard director"))) ||
+                q.equals("nominee director") || q.equals("nominee") || q.equals("nominie") || q.equals("nominie director") ||
                 q.equals("option 2") || q.equals("2") || q.equals("appointment of nominee director") || q.equals("nominee director appointment") ||
-                q.equals("nominee director document") || (q.contains("nominee") && (q.startsWith("nominee") || q.startsWith("nominie") || q.contains("only nominee") || q.contains("selected nominee")));
+                q.equals("nominee director document") || (q.contains("nominee") && (q.startsWith("nominee") || q.startsWith("nominie") || q.contains("only nominee") || q.contains("selected nominee")))) {
 
-        if (isDirectDirectorSelection || isDirectNomineeSelection) {
-            String selectedType = isDirectDirectorSelection ? "director" : "nominee_director";
+            boolean isDirectDirector = q.equals("director") || q.equals("regular director") || q.equals("option 1") || q.equals("1") ||
+                    q.equals("appointment of director") || q.equals("director appointment") || q.equals("director document") ||
+                    (q.contains("director") && !q.contains("nominee") && !q.contains("nominie"));
+
+            String selectedType = isDirectDirector ? "director" : "nominee_director";
             NomineeAppointmentDocumentData docData = documentGenerationService.createDocumentDataFromRequirement(match, query, selectedType);
 
             StringBuilder sb = new StringBuilder();
@@ -306,10 +426,8 @@ public class BusinessIntelligenceController {
                 sb.append("👉 [⬇️ Download .DOCX Document Package](/api/admin/intelligence/document/").append(docData.getId()).append("/download?type=director)\n\n");
                 sb.append("💡 *All 2 documents are rendered sequentially in continuous pagination. You can live-edit, preview, print, or download the merged package.*");
 
-                response.put("reply", sb.toString());
-                response.put("type", "director_appointment_document");
-                response.put("documentType", "director");
-                response.put("docCount", 2);
+                replyType = "director_appointment_document";
+                docCount = 2;
             } else {
                 sb.append("📄 **Nominee Director Appointment Document Package Prepared (3 Documents)**\n\n");
                 sb.append("The statutory appointment documents have been prepared for **").append(docData.getCompanyName()).append("**:\n\n");
@@ -327,20 +445,19 @@ public class BusinessIntelligenceController {
                 sb.append("👉 [⬇️ Download .DOCX Document Package](/api/admin/intelligence/document/").append(docData.getId()).append("/download?type=nominee_director)\n\n");
                 sb.append("💡 *All 3 documents are rendered sequentially in continuous pagination. You can live-edit, preview, print, or download the merged package.*");
 
-                response.put("reply", sb.toString());
-                response.put("type", "nominee_director_appointment_document");
-                response.put("documentType", "nominee_director");
-                response.put("docCount", 3);
+                replyType = "nominee_director_appointment_document";
+                docCount = 3;
             }
 
-            response.put("docId", docData.getId());
-            response.put("viewUrl", "/admin/document-viewer.html?docId=" + docData.getId() + "&type=" + selectedType);
-            response.put("downloadUrl", "/api/admin/intelligence/document/" + docData.getId() + "/download?type=" + selectedType);
-            return ResponseEntity.ok(response);
+            replyText = sb.toString();
+            docId = docData.getId();
+            viewUrl = "/admin/document-viewer.html?docId=" + docData.getId() + "&type=" + selectedType;
+            downloadUrl = "/api/admin/intelligence/document/" + docData.getId() + "/download?type=" + selectedType;
+            response.put("documentType", selectedType);
         }
-
         // Clarification prompt when user asks for appointment / director documents
-        if ((isAppointmentQuery && isDocRequest) || (q.contains("document") && (q.contains("director") || q.contains("nominee") || q.contains("nominie"))) ||
+        else if (((q.contains("appointment") || q.contains("appoinment") || q.contains("appoint")) && (q.contains("director") || q.contains("nominee") || q.contains("nominie") || q.contains("document") || q.contains("doc") || q.contains("package"))) ||
+                (q.contains("document") && (q.contains("director") || q.contains("nominee") || q.contains("nominie"))) ||
                 (q.contains("give me") && (q.contains("director") || q.contains("nominee") || q.contains("nominie"))) ||
                 (q.contains("form 45") || q.contains("form45") || q.contains("consent to act as director"))) {
 
@@ -356,15 +473,12 @@ public class BusinessIntelligenceController {
             sb.append("   • *Nominee Director Confirmation Letter to Board of Directors*\n\n");
             sb.append("👉 *Please click one of the options below or reply with **Director** or **Nominee Director**.*");
 
-            response.put("reply", sb.toString());
-            response.put("type", "appointment_clarification");
-            response.put("options", List.of("Director", "Nominee Director"));
-            response.put("companyName", compName);
-            return ResponseEntity.ok(response);
+            replyText = sb.toString();
+            replyType = "appointment_clarification";
+            options = List.of("Director", "Nominee Director");
         }
-
         // 5. Director Specific Queries
-        if (q.contains("director") || q.contains("directors") || q.contains("nominee") || q.contains("nominie")) {
+        else if (q.contains("director") || q.contains("directors") || q.contains("nominee") || q.contains("nominie")) {
             List<?> dirList = excel != null && excel.get("directors") instanceof List ? (List<?>) excel.get("directors") : new ArrayList<>();
 
             List<Map<?, ?>> activeDirs = new ArrayList<>();
@@ -376,7 +490,7 @@ public class BusinessIntelligenceController {
                     Object cessation = d.get("cessationDate");
                     Object dateCeased = d.get("dateCeased");
                     boolean isFormer = (cessation != null && !cessation.toString().trim().isEmpty() && !cessation.toString().equals("—")) ||
-                                       (dateCeased != null && !dateCeased.toString().trim().isEmpty() && !dateCeased.toString().equals("—"));
+                            (dateCeased != null && !dateCeased.toString().trim().isEmpty() && !dateCeased.toString().equals("—"));
                     if (isFormer) {
                         formerDirs.add(d);
                     } else {
@@ -435,55 +549,52 @@ public class BusinessIntelligenceController {
                     sb.append("No Nominee Director is currently registered for **").append(compName).append("**.\n");
                 }
 
-                response.put("reply", sb.toString());
-                response.put("type", "nominee_director_summary");
-                return ResponseEntity.ok(response);
-            }
+                replyText = sb.toString();
+                replyType = "nominee_director_summary";
+            } else {
+                StringBuilder sb = new StringBuilder();
+                sb.append("👨‍💼 **Directors Register & Info: ").append(compName).append("**\n\n");
+                sb.append("• **Total Listed Directors:** `").append(dirList.size()).append("` (`").append(activeDirs.size()).append(" Active`, `").append(formerDirs.size()).append(" Former`)\n\n");
 
-            StringBuilder sb = new StringBuilder();
-            sb.append("👨‍💼 **Directors Register & Info: ").append(compName).append("**\n\n");
-            sb.append("• **Total Listed Directors:** `").append(dirList.size()).append("` (`").append(activeDirs.size()).append(" Active`, `").append(formerDirs.size()).append(" Former`)\n\n");
-
-            sb.append("🟢 **Current Active Directors (").append(activeDirs.size()).append("):**\n");
-            int idx = 1;
-            for (Map<?, ?> d : activeDirs) {
-                String name = d.get("name") != null ? d.get("name").toString() : "Unknown Director";
-                String type = d.get("type") != null ? d.get("type").toString() : "Director";
-                String appDate = d.get("appointmentDate") != null ? d.get("appointmentDate").toString() : "—";
-                String nat = d.get("nationality") != null ? d.get("nationality").toString() : "—";
-                String addr = d.get("address") != null ? d.get("address").toString() : "—";
-                String email = d.get("email") != null ? d.get("email").toString() : "N/A";
-                String phone = d.get("phone") != null ? d.get("phone").toString() : (d.get("mobile") != null ? d.get("mobile").toString() : "N/A");
-
-                sb.append(idx++).append(". **").append(name).append("**\n");
-                sb.append("   • Designation: `").append(type).append("`\n");
-                sb.append("   • Appointed On: `").append(appDate).append("`\n");
-                sb.append("   • Nationality: `").append(nat).append("`\n");
-                sb.append("   • Contact: `").append(email).append("` | `").append(phone).append("`\n");
-                sb.append("   • Address: `").append(addr).append("`\n\n");
-            }
-
-            if (!formerDirs.isEmpty()) {
-                sb.append("🔴 **Former / Resigned Directors (").append(formerDirs.size()).append("):**\n");
-                int fIdx = 1;
-                for (Map<?, ?> d : formerDirs) {
-                    String name = d.get("name") != null ? d.get("name").toString() : "Former Director";
-                    String cessDate = d.get("cessationDate") != null ? d.get("cessationDate").toString() : (d.get("dateCeased") != null ? d.get("dateCeased").toString() : "—");
+                sb.append("🟢 **Current Active Directors (").append(activeDirs.size()).append("):**\n");
+                int idx = 1;
+                for (Map<?, ?> d : activeDirs) {
+                    String name = d.get("name") != null ? d.get("name").toString() : "Unknown Director";
+                    String type = d.get("type") != null ? d.get("type").toString() : "Director";
                     String appDate = d.get("appointmentDate") != null ? d.get("appointmentDate").toString() : "—";
                     String nat = d.get("nationality") != null ? d.get("nationality").toString() : "—";
+                    String addr = d.get("address") != null ? d.get("address").toString() : "—";
+                    String email = d.get("email") != null ? d.get("email").toString() : "N/A";
+                    String phone = d.get("phone") != null ? d.get("phone").toString() : (d.get("mobile") != null ? d.get("mobile").toString() : "N/A");
 
-                    sb.append(fIdx++).append(". **").append(name).append("** (Appointed: `").append(appDate).append("` | Ceased: `").append(cessDate).append("`)\n");
+                    sb.append(idx++).append(". **").append(name).append("**\n");
+                    sb.append("   • Designation: `").append(type).append("`\n");
+                    sb.append("   • Appointed On: `").append(appDate).append("`\n");
                     sb.append("   • Nationality: `").append(nat).append("`\n");
+                    sb.append("   • Contact: `").append(email).append("` | `").append(phone).append("`\n");
+                    sb.append("   • Address: `").append(addr).append("`\n\n");
                 }
+
+                if (!formerDirs.isEmpty()) {
+                    sb.append("🔴 **Former / Resigned Directors (").append(formerDirs.size()).append("):**\n");
+                    int fIdx = 1;
+                    for (Map<?, ?> d : formerDirs) {
+                        String name = d.get("name") != null ? d.get("name").toString() : "Former Director";
+                        String cessDate = d.get("cessationDate") != null ? d.get("cessationDate").toString() : (d.get("dateCeased") != null ? d.get("dateCeased").toString() : "—");
+                        String appDate = d.get("appointmentDate") != null ? d.get("appointmentDate").toString() : "—";
+                        String nat = d.get("nationality") != null ? d.get("nationality").toString() : "—";
+
+                        sb.append(fIdx++).append(". **").append(name).append("** (Appointed: `").append(appDate).append("` | Ceased: `").append(cessDate).append("`)\n");
+                        sb.append("   • Nationality: `").append(nat).append("`\n");
+                    }
+                }
+
+                replyText = sb.toString();
+                replyType = "director_summary";
             }
-
-            response.put("reply", sb.toString());
-            response.put("type", "director_summary");
-            return ResponseEntity.ok(response);
         }
-
         // 6. Company Secretary Queries
-        if (q.contains("secretary") || q.contains("secretaries")) {
+        else if (q.contains("secretary") || q.contains("secretaries")) {
             List<?> secList = excel != null && excel.get("secretaries") instanceof List ? (List<?>) excel.get("secretaries") : new ArrayList<>();
 
             List<Map<?, ?>> activeSecs = new ArrayList<>();
@@ -532,13 +643,11 @@ public class BusinessIntelligenceController {
                 }
             }
 
-            response.put("reply", sb.toString());
-            response.put("type", "secretary_summary");
-            return ResponseEntity.ok(response);
+            replyText = sb.toString();
+            replyType = "secretary_summary";
         }
-
         // 7. Shareholder Queries
-        if (q.contains("shareholder") || q.contains("member") || q.contains("owner") || q.contains("capital") || q.contains("share")) {
+        else if (q.contains("shareholder") || q.contains("member") || q.contains("owner") || q.contains("capital") || q.contains("share")) {
             List<?> memberList = excel != null && excel.get("members") instanceof List ? (List<?>) excel.get("members") : new ArrayList<>();
 
             StringBuilder sb = new StringBuilder();
@@ -560,13 +669,23 @@ public class BusinessIntelligenceController {
                 }
             }
 
-            response.put("reply", sb.toString());
-            response.put("type", "shareholder_summary");
-            return ResponseEntity.ok(response);
+            replyText = sb.toString();
+            replyType = "shareholder_summary";
         }
+        // General metrics & count queries
+        else if (q.contains("total") || q.contains("how many") || q.contains("count") || q.contains("client in system") || q.contains("documents uploaded")) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("📊 **Globalisor Platform Analytics**\n\n");
+            sb.append("• **Total Active Clients:** `").append(users.size() > 0 ? users.size() : 102).append(" Registered Entities`\n");
+            sb.append("• **Active Requirements / Services:** `").append(requirements.size() > 0 ? requirements.size() : 102).append(" Profiles`\n");
+            sb.append("• **Migrated Documents in Vault:** `").append(allDocs.size()).append(" Documents`\n");
+            sb.append("• **Current Active Entity:** `").append(compName).append("` (`").append(uen).append("`)\n");
 
+            replyText = sb.toString();
+            replyType = "platform_metrics";
+        }
         // Default Company Profile
-        if (match != null) {
+        else if (match != null && (q.contains("tell me about") || q.contains("about") || q.contains("profile") || q.contains("company") || q.contains("info") || q.contains("abbey") || q.contains("3b"))) {
             List<?> dirs = excel != null && excel.get("directors") instanceof List ? (List<?>) excel.get("directors") : new ArrayList<>();
             List<?> members = excel != null && excel.get("members") instanceof List ? (List<?>) excel.get("members") : new ArrayList<>();
 
@@ -575,29 +694,75 @@ public class BusinessIntelligenceController {
             sb.append("• **UEN:** `").append(uen).append("`\n");
             sb.append("• **Status:** Active / Verified\n");
             sb.append("• **Appointed Directors:** `").append(dirs.size()).append(" Directors`\n");
-            sb.append("• **Registered Shareholders:** `").append(members.size()).append(" Shareholders`\n");
+            sb.append("• **Registered Shareholders:** `").append(members.size()).append(" Shareholders`\n\n");
+            sb.append("💡 *You can ask for director details, nominee director documents, registered office address changes, or shareholder register.*");
 
-            response.put("reply", sb.toString());
-            response.put("type", "company_profile");
-            return ResponseEntity.ok(response);
+            replyText = sb.toString();
+            replyType = "company_profile";
+        }
+        // Default Overview Fallback
+        else {
+            StringBuilder sb = new StringBuilder();
+            sb.append("🤖 **Globalisor Business Intelligence Assistant**\n\n");
+            sb.append("Active Context Entity: **").append(compName).append("** (`").append(uen).append("`)\n\n");
+            sb.append("You can ask questions like:\n");
+            sb.append("👉 *'What is the UEN?'*\n");
+            sb.append("👉 *'Who are the current directors?'*\n");
+            sb.append("👉 *'Who is the company secretary?'*\n");
+            sb.append("👉 *'Give me document of nominee director'*\n");
+            sb.append("👉 *'Give me document of change of address'*");
+
+            replyText = sb.toString();
+            replyType = "general_overview";
         }
 
-        // Default Intelligence Overview
-        StringBuilder sb = new StringBuilder();
-        sb.append("🤖 **Globalisor Business Intelligence Assistant**\n\n");
-        sb.append("Here is an overview of your current platform analytics:\n");
-        sb.append("• **Active Clients:** `2 Key Managed Entities` (3B Trading & Abbey Holdings)\n");
-        sb.append("• **Migrated Documents:** `").append(allDocs.size()).append(" Records` in MongoDB\n\n");
-        sb.append("You can ask questions like:\n");
-        sb.append("👉 *'What is the UEN of Abbey Holdings?'*\n");
-        sb.append("👉 *'Who are the current directors of 3B Trading?'*\n");
-        sb.append("👉 *'Who is the company secretary?'*\n");
-        sb.append("👉 *'When was the company incorporated and what is its age?'*");
+        // Auto-update thread title if default
+        if ("New Conversation".equalsIgnoreCase(thread.getTitle()) || "General BI Inquiry".equalsIgnoreCase(thread.getTitle())) {
+            String shortComp = compName.replace("PTE. LTD.", "").replace("PTE LTD", "").trim();
+            thread.setTitle(shortComp + " - " + (replyType.replace("_", " ").substring(0, 1).toUpperCase() + replyType.replace("_", " ").substring(1)));
+        }
 
-        response.put("reply", sb.toString());
-        response.put("type", "general_overview");
+        // Record User Message in Thread
+        ChatThread.ChatMessage userMsg = new ChatThread.ChatMessage();
+        userMsg.setId(UUID.randomUUID().toString().replace("-", "").substring(0, 12));
+        userMsg.setSender("user");
+        userMsg.setText(query);
+        userMsg.setType("user_query");
+        userMsg.setCompanyName(compName);
+        userMsg.setTimestamp(new Date());
+        thread.getMessages().add(userMsg);
+
+        // Record Assistant Message in Thread
+        ChatThread.ChatMessage botMsg = new ChatThread.ChatMessage();
+        botMsg.setId(UUID.randomUUID().toString().replace("-", "").substring(0, 12));
+        botMsg.setSender("assistant");
+        botMsg.setText(replyText);
+        botMsg.setType(replyType);
+        botMsg.setOptions(options);
+        botMsg.setCompanyName(compName);
+        botMsg.setDocId(docId);
+        botMsg.setViewUrl(viewUrl);
+        botMsg.setDownloadUrl(downloadUrl);
+        botMsg.setDocCount(docCount);
+        botMsg.setTimestamp(new Date());
+        thread.getMessages().add(botMsg);
+
+        thread.setUpdatedAt(new Date());
+        chatThreadRepository.save(thread);
+
+        response.put("reply", replyText);
+        response.put("type", replyType);
+        response.put("threadTitle", thread.getTitle());
+        if (options != null) response.put("options", options);
+        if (docId != null) response.put("docId", docId);
+        if (viewUrl != null) response.put("viewUrl", viewUrl);
+        if (downloadUrl != null) response.put("downloadUrl", downloadUrl);
+        if (docCount != null) response.put("docCount", docCount);
+
         return ResponseEntity.ok(response);
     }
+
+    // --- Document Generation & Download Endpoints (Preserved 100% Unchanged) ---
 
     @GetMapping("/document/{docId}/data")
     public ResponseEntity<?> getDocumentData(@PathVariable("docId") String docId) {
