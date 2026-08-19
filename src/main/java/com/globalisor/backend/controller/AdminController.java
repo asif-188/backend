@@ -529,6 +529,443 @@ public class AdminController {
 
 
 
+    @GetMapping("/admin/clients")
+    public ResponseEntity<?> getClientList() {
+        List<User> users = userRepository.findAll();
+        List<Requirement> allRequirements = requirementRepository.findAll();
+        List<ClientDocument> allDocuments = clientDocumentRepository.findAll();
+        List<Onboarding> allOnboardings = onboardingRepository.findAll();
+
+        List<Map<String, Object>> clientList = new ArrayList<>();
+        for (User u : users) {
+            String role = u.getRole();
+            boolean isClient = true;
+            if (role != null) {
+                String trimmedRole = role.trim();
+                if (trimmedRole.equalsIgnoreCase("ADMIN") || trimmedRole.equalsIgnoreCase("STAFF")) {
+                    isClient = false;
+                }
+            }
+            if (!isClient) continue;
+
+            Map<String, Object> client = new HashMap<>();
+            client.put("id", u.getId());
+            client.put("firstName", u.getFirstName() != null ? u.getFirstName() : "");
+            client.put("lastName", u.getLastName() != null ? u.getLastName() : "");
+            client.put("name", ((u.getFirstName() != null ? u.getFirstName() : "") + " " + (u.getLastName() != null ? u.getLastName() : "")).trim());
+            client.put("email", u.getEmail() != null ? u.getEmail() : "");
+            client.put("password", u.getPlainPassword() != null ? u.getPlainPassword() : "");
+            client.put("hasPassword", u.getPlainPassword() != null && !u.getPlainPassword().isEmpty());
+            client.put("phone", u.getPhone() != null ? u.getPhone() : "");
+            client.put("role", u.getRole() != null ? u.getRole() : "USER");
+            client.put("loginUrl", "/login.html");
+
+            // Company Name resolution
+            String companyName = u.getCompanyName();
+            String status = "Active";
+            for (Requirement r : allRequirements) {
+                if (r.getUserId() != null && r.getUserId().equalsIgnoreCase(u.getId())) {
+                    if (r.getStatus() != null && !r.getStatus().isEmpty()) {
+                        status = r.getStatus();
+                    }
+                    if (companyName == null || companyName.isEmpty()) {
+                        Map<String, Object> data = r.getData();
+                        if (data != null && data.containsKey("names")) {
+                            Object namesObj = data.get("names");
+                            if (namesObj instanceof List && !((List<?>) namesObj).isEmpty()) {
+                                companyName = String.valueOf(((List<?>) namesObj).get(0));
+                            }
+                        }
+                        if ((companyName == null || companyName.isEmpty()) && data != null && data.containsKey("excelData")) {
+                            Object excelObj = data.get("excelData");
+                            if (excelObj instanceof Map && ((Map<?, ?>) excelObj).containsKey("companyName")) {
+                                companyName = String.valueOf(((Map<?, ?>) excelObj).get("companyName"));
+                            }
+                        }
+                    }
+                }
+            }
+            if (companyName == null || companyName.isEmpty() || "null".equalsIgnoreCase(companyName)) {
+                companyName = "Globalisor Entity (" + u.getId() + ")";
+            }
+            client.put("companyName", companyName);
+            client.put("status", status);
+
+            // Document count
+            long docCount = allDocuments.stream()
+                .filter(d -> d.getClientId() != null && d.getClientId().equalsIgnoreCase(u.getId()))
+                .count();
+            client.put("docsCount", docCount);
+
+            // Onboarding portal activation
+            boolean portalActivated = true;
+            for (Onboarding ob : allOnboardings) {
+                if (ob.getClientId() != null && ob.getClientId().equalsIgnoreCase(u.getId())) {
+                    portalActivated = ob.isPortalActivated();
+                    break;
+                }
+            }
+            client.put("portalActivated", portalActivated);
+
+            clientList.add(client);
+        }
+        return ResponseEntity.ok(clientList);
+    }
+
+    @PostMapping("/admin/clients/batch-generate")
+    public ResponseEntity<?> batchGenerateClientCredentials(@RequestBody(required = false) Map<String, Object> body) {
+        boolean forceAll = body != null && Boolean.TRUE.equals(body.get("forceRegenerate"));
+        List<User> allUsers = userRepository.findAll();
+        List<Requirement> allRequirements = requirementRepository.findAll();
+
+        int generatedCount = 0;
+        List<Map<String, Object>> resultList = new ArrayList<>();
+
+        for (User u : allUsers) {
+            String role = u.getRole();
+            boolean isClient = true;
+            if (role != null) {
+                String trimmedRole = role.trim();
+                if (trimmedRole.equalsIgnoreCase("ADMIN") || trimmedRole.equalsIgnoreCase("STAFF")) {
+                    isClient = false;
+                }
+            }
+            if (!isClient) continue;
+
+            boolean needsPassword = forceAll || u.getPlainPassword() == null || u.getPlainPassword().isEmpty() || "password123".equals(u.getPlainPassword());
+            String rawPassword = u.getPlainPassword();
+            if (needsPassword) {
+                int randomNum = (int) (Math.random() * 9000) + 1000;
+                rawPassword = "Glob-" + randomNum;
+                u.setPlainPassword(rawPassword);
+                u.setPassword(encoder.encode(rawPassword));
+                generatedCount++;
+            }
+
+            // Ensure valid email
+            String email = u.getEmail();
+            if (email == null || !email.contains("@") || email.endsWith("@example.com") || email.startsWith("client_sync_")) {
+                String fName = u.getFirstName() != null ? u.getFirstName() : "client";
+                String lName = u.getLastName() != null ? u.getLastName() : "";
+                String base = (fName + (lName.isEmpty() ? "" : "." + lName)).toLowerCase().replaceAll("[^a-z0-9]", "");
+                if (base.isEmpty()) base = "client." + (u.getId() != null ? u.getId().toLowerCase().replaceAll("[^a-z0-9]", "") : "user");
+                email = base + "@client.globalisor.com";
+                u.setEmail(email);
+            }
+
+            // Company Name
+            String companyName = u.getCompanyName();
+            if (companyName == null || companyName.isEmpty()) {
+                for (Requirement r : allRequirements) {
+                    if (r.getUserId() != null && r.getUserId().equalsIgnoreCase(u.getId())) {
+                        Map<String, Object> data = r.getData();
+                        if (data != null && data.containsKey("names")) {
+                            Object namesObj = data.get("names");
+                            if (namesObj instanceof List && !((List<?>) namesObj).isEmpty()) {
+                                companyName = String.valueOf(((List<?>) namesObj).get(0));
+                            }
+                        }
+                    }
+                }
+            }
+            if (companyName != null && !companyName.isEmpty()) {
+                u.setCompanyName(companyName);
+            }
+
+            u.setRole("USER");
+            userRepository.save(u);
+
+            // Ensure Onboarding Record is activated
+            Optional<Onboarding> obOpt = onboardingRepository.findByClientId(u.getId());
+            if (obOpt.isEmpty()) {
+                Onboarding ob = new Onboarding();
+                ob.setClientId(u.getId());
+                ob.setClientName(u.getFirstName() + " " + u.getLastName());
+                ob.setClientEmail(u.getEmail());
+                ob.setStatus("in_progress");
+                ob.setPortalActivated(true);
+                ob.setProgressPercent(10);
+                ob.setUpdatedAt(System.currentTimeMillis());
+                ob.getAuditLogs().add("Migrated client credentials initialized by administrator.");
+                onboardingRepository.save(ob);
+            } else {
+                Onboarding ob = obOpt.get();
+                ob.setPortalActivated(true);
+                ob.setClientEmail(u.getEmail());
+                ob.setClientName(u.getFirstName() + " " + u.getLastName());
+                onboardingRepository.save(ob);
+            }
+
+            // Ensure KYC profile exists
+            if (kycRepository.findByClientId(u.getId()).isEmpty()) {
+                Kyc kyc = new Kyc();
+                kyc.setId("KYC-" + System.currentTimeMillis() + "-" + u.getId());
+                kyc.setClientId(u.getId());
+                kyc.setName(u.getFirstName() + " " + u.getLastName());
+                kyc.setIdType("Passport / NRIC");
+                kyc.setIdNum("Verified on Migration");
+                kyc.setNation("Singapore");
+                kyc.setStatus("approved");
+                kyc.setRisk("Low");
+                kyc.setLastUpdated(System.currentTimeMillis());
+                kyc.getAuditLogs().add("Migrated KYC record active.");
+                kycRepository.save(kyc);
+            }
+
+            // Ensure Compliance record exists
+            if (complianceRepository.findByClientId(u.getId()).isEmpty()) {
+                Compliance comp = new Compliance();
+                comp.setId("COMP-" + System.currentTimeMillis() + "-" + u.getId());
+                comp.setClientId(u.getId());
+                comp.setName(u.getFirstName() + " " + u.getLastName());
+                comp.setType("AML Screening & Annual Filing");
+                comp.setStatus("approved");
+                comp.setRisk("Low");
+                comp.setLastUpdated(System.currentTimeMillis());
+                comp.getAuditLogs().add("Migrated compliance monitoring active.");
+                complianceRepository.save(comp);
+            }
+
+            Map<String, Object> cMap = new HashMap<>();
+            cMap.put("id", u.getId());
+            cMap.put("firstName", u.getFirstName());
+            cMap.put("lastName", u.getLastName());
+            cMap.put("name", u.getFirstName() + " " + u.getLastName());
+            cMap.put("email", u.getEmail());
+            cMap.put("password", rawPassword);
+            cMap.put("companyName", companyName != null ? companyName : "Globalisor Entity");
+            cMap.put("loginUrl", "/login.html");
+            cMap.put("status", "Active");
+            resultList.add(cMap);
+        }
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", true);
+        response.put("totalClients", resultList.size());
+        response.put("updatedCount", generatedCount);
+        response.put("message", "Generated credentials for " + resultList.size() + " migrated clients.");
+        response.put("clients", resultList);
+
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/admin/clients")
+    public ResponseEntity<?> createClient(@RequestBody Map<String, String> body) {
+        String firstName = body.get("firstName");
+        String lastName = body.getOrDefault("lastName", "");
+        String email = body.get("email");
+        String companyName = body.get("companyName");
+        String customPassword = body.get("password");
+        String phone = body.getOrDefault("phone", "");
+
+        if (firstName == null || firstName.trim().isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "First name is required."));
+        }
+
+        if (email == null || email.trim().isEmpty() || !email.contains("@")) {
+            String base = (firstName + (lastName.isEmpty() ? "" : "." + lastName)).toLowerCase().replaceAll("[^a-z0-9]", "");
+            email = base + "@client.globalisor.com";
+        }
+
+        String encryptedEmail = encryptionUtils.encryptQueryable(email);
+        int suffix = 1;
+        String baseEmail = email.contains("@") ? email.split("@")[0] : email;
+        String domain = email.contains("@") ? email.split("@")[1] : "client.globalisor.com";
+        while (userRepository.existsByEmail(encryptedEmail)) {
+            email = baseEmail + suffix + "@" + domain;
+            encryptedEmail = encryptionUtils.encryptQueryable(email);
+            suffix++;
+        }
+
+        String rawPassword;
+        if (customPassword != null && !customPassword.trim().isEmpty()) {
+            rawPassword = customPassword.trim();
+        } else {
+            int randomNum = (int) (Math.random() * 9000) + 1000;
+            rawPassword = "Glob-" + randomNum;
+        }
+
+        String encodedPassword = encoder.encode(rawPassword);
+        User client = new User(firstName, lastName, email, encodedPassword);
+        client.setId("C-" + System.currentTimeMillis());
+        client.setRole("USER");
+        client.setPlainPassword(rawPassword);
+        client.setCompanyName(companyName != null && !companyName.isEmpty() ? companyName : firstName + " Venture Pte. Ltd.");
+        client.setPhone(phone);
+        userRepository.save(client);
+
+        // Auto-initialize Requirement (Company entity)
+        Requirement req = new Requirement();
+        req.setId("SRV-" + System.currentTimeMillis());
+        req.setUserId(client.getId());
+        req.setStatus("approved");
+        req.setStaff("Sarah Lim");
+        Map<String, Object> data = new HashMap<>();
+        data.put("names", Arrays.asList(client.getCompanyName()));
+        data.put("serviceType", "Company Incorporation");
+        req.setData(data);
+        req.setUpdatedAt(new Date());
+        requirementRepository.save(req);
+
+        // Auto-initialize KYC
+        Kyc kyc = new Kyc();
+        kyc.setId("KYC-" + System.currentTimeMillis());
+        kyc.setClientId(client.getId());
+        kyc.setName(client.getFirstName() + " " + client.getLastName());
+        kyc.setIdType("Passport / NRIC");
+        kyc.setIdNum("Pending Submission");
+        kyc.setNation("Singapore");
+        kyc.setStatus("pending");
+        kyc.setRisk("Low");
+        kyc.setLastUpdated(System.currentTimeMillis());
+        kyc.getAuditLogs().add("KYC profile initialized on client creation.");
+        kycRepository.save(kyc);
+
+        // Auto-initialize Compliance
+        Compliance comp = new Compliance();
+        comp.setId("COMP-" + System.currentTimeMillis());
+        comp.setClientId(client.getId());
+        comp.setName(client.getFirstName() + " " + client.getLastName());
+        comp.setType("AML Screening & Corporate Secretarial");
+        comp.setStatus("pending");
+        comp.setRisk("Low");
+        comp.setLastUpdated(System.currentTimeMillis());
+        comp.getAuditLogs().add("Compliance initialized.");
+        complianceRepository.save(comp);
+
+        // Auto-initialize Onboarding
+        Onboarding ob = new Onboarding();
+        ob.setClientId(client.getId());
+        ob.setClientName(client.getFirstName() + " " + client.getLastName());
+        ob.setClientEmail(client.getEmail());
+        ob.setStatus("in_progress");
+        ob.setPortalActivated(true);
+        ob.setProgressPercent(10);
+        ob.setUpdatedAt(System.currentTimeMillis());
+        onboardingRepository.save(ob);
+
+        try {
+            Map<String, Object> event = new HashMap<>();
+            event.put("type", "new_user");
+            Map<String, Object> uMap = new HashMap<>();
+            uMap.put("id", client.getId());
+            uMap.put("name", (client.getFirstName() + " " + client.getLastName()).trim());
+            uMap.put("role", client.getRole());
+            uMap.put("email", client.getEmail());
+            event.put("user", uMap);
+            chatWebSocketHandler.broadcastEvent(event);
+        } catch (Exception e) {}
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("id", client.getId());
+        response.put("firstName", client.getFirstName());
+        response.put("lastName", client.getLastName());
+        response.put("name", client.getFirstName() + " " + client.getLastName());
+        response.put("email", client.getEmail());
+        response.put("password", rawPassword);
+        response.put("companyName", client.getCompanyName());
+        response.put("phone", client.getPhone());
+        response.put("loginUrl", "/login.html");
+
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/admin/clients/{id}/reset-password")
+    public ResponseEntity<?> resetClientPassword(@PathVariable String id, @RequestBody(required = false) Map<String, String> body) {
+        Optional<User> userOpt = userRepository.findById(id);
+        if (userOpt.isEmpty()) return ResponseEntity.notFound().build();
+
+        User client = userOpt.get();
+        String rawPassword;
+        if (body != null && body.containsKey("password") && body.get("password") != null && !body.get("password").trim().isEmpty()) {
+            rawPassword = body.get("password").trim();
+        } else {
+            int randomNum = (int) (Math.random() * 9000) + 1000;
+            rawPassword = "Glob-" + randomNum;
+        }
+
+        client.setPlainPassword(rawPassword);
+        client.setPassword(encoder.encode(rawPassword));
+        userRepository.save(client);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("id", client.getId());
+        response.put("name", client.getFirstName() + " " + client.getLastName());
+        response.put("email", client.getEmail());
+        response.put("password", rawPassword);
+        response.put("companyName", client.getCompanyName());
+        response.put("loginUrl", "/login.html");
+
+        return ResponseEntity.ok(response);
+    }
+
+    @PutMapping("/admin/clients/{id}")
+    public ResponseEntity<?> updateClient(@PathVariable String id, @RequestBody Map<String, String> body) {
+        Optional<User> userOpt = userRepository.findById(id);
+        if (userOpt.isEmpty()) return ResponseEntity.notFound().build();
+
+        User client = userOpt.get();
+        if (body.containsKey("firstName")) client.setFirstName(body.get("firstName"));
+        if (body.containsKey("lastName")) client.setLastName(body.get("lastName"));
+        if (body.containsKey("email")) client.setEmail(body.get("email"));
+        if (body.containsKey("phone")) client.setPhone(body.get("phone"));
+        if (body.containsKey("companyName")) {
+            String cName = body.get("companyName");
+            client.setCompanyName(cName);
+            // Also update requirement company name if present
+            List<Requirement> reqs = requirementRepository.findAll();
+            for (Requirement r : reqs) {
+                if (r.getUserId() != null && r.getUserId().equalsIgnoreCase(id)) {
+                    Map<String, Object> data = r.getData() != null ? r.getData() : new HashMap<>();
+                    data.put("names", Arrays.asList(cName));
+                    r.setData(data);
+                    requirementRepository.save(r);
+                }
+            }
+        }
+        if (body.containsKey("password") && body.get("password") != null && !body.get("password").trim().isEmpty()) {
+            String rawPassword = body.get("password").trim();
+            client.setPlainPassword(rawPassword);
+            client.setPassword(encoder.encode(rawPassword));
+        }
+
+        userRepository.save(client);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("id", client.getId());
+        response.put("firstName", client.getFirstName());
+        response.put("lastName", client.getLastName());
+        response.put("name", client.getFirstName() + " " + client.getLastName());
+        response.put("email", client.getEmail());
+        response.put("password", client.getPlainPassword() != null ? client.getPlainPassword() : "");
+        response.put("companyName", client.getCompanyName());
+        response.put("phone", client.getPhone());
+        response.put("loginUrl", "/login.html");
+
+        return ResponseEntity.ok(response);
+    }
+
+    @DeleteMapping("/admin/clients/{id}")
+    public ResponseEntity<?> deleteClient(@PathVariable String id) {
+        Optional<User> userOpt = userRepository.findById(id);
+        if (userOpt.isEmpty()) return ResponseEntity.notFound().build();
+
+        userRepository.deleteById(id);
+
+        // Delete associated records
+        List<Requirement> reqs = requirementRepository.findAll();
+        for (Requirement r : reqs) {
+            if (r.getUserId() != null && r.getUserId().equalsIgnoreCase(id)) {
+                requirementRepository.deleteById(r.getId());
+            }
+        }
+        onboardingRepository.findByClientId(id).ifPresent(ob -> onboardingRepository.deleteById(ob.getId()));
+        kycRepository.findByClientId(id).ifPresent(k -> kycRepository.deleteById(k.getId()));
+        complianceRepository.findByClientId(id).ifPresent(c -> complianceRepository.deleteById(c.getId()));
+
+        return ResponseEntity.ok(Map.of("success", true, "message", "Client deleted successfully."));
+    }
+
     @DeleteMapping("/clients")
     public ResponseEntity<?> clearAllClients() {
         List<User> allUsers = userRepository.findAll();

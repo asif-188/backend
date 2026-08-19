@@ -18,6 +18,8 @@ public class User {
     private String role = "USER";
     private String plainPassword;
     private Long lastSeenTime;
+    private String companyName;
+    private String phone;
     
     // HR & Staff ID Card Fields
     private String employeeId;

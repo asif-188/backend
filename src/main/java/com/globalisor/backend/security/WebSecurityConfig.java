@@ -77,7 +77,7 @@ public class WebSecurityConfig {
                         .requestMatchers("/api/clients/**").permitAll()
                         .requestMatchers("/api/services/**").permitAll()
                         .requestMatchers("/api/applications/**").permitAll()
-                        .requestMatchers("/api/admin/staff/**").permitAll()
+                        .requestMatchers("/api/admin/**").permitAll()
                         .requestMatchers("/api/blogs/**").permitAll()
                         .requestMatchers("/api/static-content/**").permitAll()
                         .requestMatchers("/api/countries/**").permitAll()
