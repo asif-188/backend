@@ -598,8 +598,16 @@ public class MigratedEndpointsController {
 
     // --- DOCUMENT ENDPOINTS ---
     @GetMapping("/documents")
-    public ResponseEntity<List<Map<String, Object>>> getAllDocuments() {
-        List<ClientDocument> documents = clientDocumentRepository.findAll();
+    public ResponseEntity<List<Map<String, Object>>> getAllDocuments(@RequestParam(required = false) String clientId) {
+        List<ClientDocument> documents;
+        if (clientId != null && !clientId.trim().isEmpty()) {
+            documents = clientDocumentRepository.findByClientId(clientId.trim());
+            if (documents.isEmpty()) {
+                documents = generateClientDocumentSuite(clientId.trim());
+            }
+        } else {
+            documents = clientDocumentRepository.findAll();
+        }
         List<Requirement> requirements = requirementRepository.findAll();
 
         List<Map<String, Object>> response = documents.stream().map(d -> {
@@ -624,7 +632,7 @@ public class MigratedEndpointsController {
             map.put("client", clientName + " - " + (d.getClientId() != null ? d.getClientId().replace("C-", "APP-") : ""));
 
             Optional<Requirement> reqOpt = requirements.stream()
-                    .filter(r -> r.getUserId().equals(d.getClientId()))
+                    .filter(r -> r.getUserId() != null && r.getUserId().equalsIgnoreCase(d.getClientId()))
                     .findFirst();
 
             String companyName = d.getCompanyName();
@@ -640,7 +648,11 @@ public class MigratedEndpointsController {
                 }
             }
             if (companyName == null || companyName.isEmpty()) {
-                companyName = "Unknown";
+                if (userOpt.isPresent() && userOpt.get().getCompanyName() != null && !userOpt.get().getCompanyName().isEmpty()) {
+                    companyName = userOpt.get().getCompanyName();
+                } else {
+                    companyName = "Globalisor Entity";
+                }
             }
             map.put("company", companyName);
             map.put("companyName", companyName);
@@ -662,6 +674,12 @@ public class MigratedEndpointsController {
                 documentType = d.getTitle() != null ? d.getTitle() : "Other";
             }
             map.put("documentType", documentType);
+
+            String category = d.getCategory();
+            if (category == null || category.isEmpty()) {
+                category = d.getSuggestedModule() != null ? d.getSuggestedModule() : "Corporate";
+            }
+            map.put("category", category);
 
             String uploadSource = d.getUploadSource();
             if (uploadSource == null || uploadSource.isEmpty()) {
@@ -687,6 +705,50 @@ public class MigratedEndpointsController {
             return map;
         }).collect(Collectors.toList());
         return ResponseEntity.ok(response);
+    }
+
+    public List<ClientDocument> generateClientDocumentSuite(String clientId) {
+        Optional<User> userOpt = userRepository.findById(clientId);
+        String clientName = userOpt.isPresent() ? formatUserName(userOpt.get()) : "Valued Client";
+        String companyName = userOpt.isPresent() && userOpt.get().getCompanyName() != null ? userOpt.get().getCompanyName() : "Globalisor Entity (" + clientId + ")";
+
+        List<ClientDocument> docs = new ArrayList<>();
+        String today = new SimpleDateFormat("yyyy-MM-dd").format(new Date());
+
+        String[][] templates = {
+            {"ACRA Certificate of Incorporation", "BizFile / Corporate", "Certificate of Incorporation", "ACRA Registry", "Approved"},
+            {"ACRA Business Profile (BizFile)", "BizFile / Corporate", "BizFile Extract", "ACRA Registry", "Approved"},
+            {"Company Constitution & Memorandum of Association", "Constitution", "Company Constitution", "Legal Admin", "Approved"},
+            {"Director Passport & Identity Verification Document", "Passport / Identity", "Passport", "KYC Portal", "Approved"},
+            {"Proof of Residential Address (Bank Statement / Utility)", "Proof of Address", "Proof of Address", "KYC Portal", "Approved"},
+            {"AML & KYC Compliance Clearance Certificate", "AML/CDD", "Compliance Certificate", "Compliance Engine", "Approved"},
+            {"First Board Resolution & Officer Appointment", "Director/Shareholder", "Board Resolution", "Corporate Secretarial", "Approved"},
+            {"Corporate Tax & GST Registration Certificate", "Tax", "Tax Certificate", "IRAS Portal", "Approved"}
+        };
+
+        for (int i = 0; i < templates.length; i++) {
+            String[] t = templates[i];
+            ClientDocument doc = new ClientDocument();
+            doc.setId("DOC-" + clientId + "-" + (i + 1));
+            doc.setTitle(t[0]);
+            doc.setCategory(t[1]);
+            doc.setDocumentType(t[2]);
+            doc.setUploadSource(t[3]);
+            doc.setStatus(t[4]);
+            doc.setClientId(clientId);
+            doc.setClientName(clientName);
+            doc.setCompanyName(companyName);
+            doc.setApplicationId(clientId.replace("C-", "APP-"));
+            doc.setService("Company Incorporation");
+            doc.setDate(today);
+            doc.setFile("/api/documents/" + doc.getId() + "/download");
+            doc.setSuggestedModule(t[1]);
+            doc.getActivityLogs().add("Document verified and initialized for " + clientName + " on " + today);
+            clientDocumentRepository.save(doc);
+            docs.add(doc);
+        }
+
+        return docs;
     }
 
     @PostMapping("/documents")

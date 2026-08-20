@@ -211,10 +211,15 @@ public class DocumentMigrationController {
             case "All Signed":
             case "Change of CS":
             case "Change of Auditors":
-            case "AGM AR": return "Compliance";
+            case "AGM AR":
+            case "Bizfile & filing":
+            case "RONS": return "Compliance";
+            case "Tax":
+            case "Final Demand": return "Finance";
             case "Change of Address": return "Registered Office";
             case "Change of Directors":
             case "Allotment of Shares": return "Director/Shareholder";
+            case "Others":
             default: return "Misc";
         }
     }

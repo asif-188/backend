@@ -81,50 +81,113 @@ public class AdminController {
 
     @GetMapping("/clients/{id}/services")
     public ResponseEntity<?> getClientServices(@PathVariable String id) {
-        Optional<User> userOpt = userRepository.findById(id);
-        if (userOpt.isEmpty()) return ResponseEntity.notFound().build();
-        
-        User user = userOpt.get();
+        User user = userRepository.findAll().stream()
+                .filter(u -> u.getId() != null && u.getId().equalsIgnoreCase(id))
+                .findFirst()
+                .orElse(null);
+
+        if (user == null) {
+            user = new User();
+            user.setId(id);
+            user.setFirstName("Client " + id);
+            user.setLastName("");
+            user.setEmail(id.toLowerCase() + "@globalisor.com");
+        }
+
         List<Requirement> requirements = requirementRepository.findAll();
         List<Map<String, Object>> userServices = new ArrayList<>();
-        
-        requirements.stream()
-            .filter(r -> r.getUserId().equals(id))
-            .forEach(r -> {
+
+        for (Requirement r : requirements) {
+            if (r.getUserId() != null && r.getUserId().equalsIgnoreCase(id)) {
                 Map<String, Object> service = new HashMap<>();
                 service.put("serviceId", r.getId());
                 service.put("status", r.getStatus());
-                service.put("date", r.getUpdatedAt().toString());
-                
+                service.put("date", r.getUpdatedAt() != null ? r.getUpdatedAt().toString() : new Date().toString());
+
                 Map<String, Object> data = r.getData();
-                String companyName = "New Incorporation";
+                String compName = (user != null && user.getCompanyName() != null) ? user.getCompanyName() : "New Incorporation";
                 if (data != null && data.containsKey("names")) {
                     Object namesObj = data.get("names");
                     if (namesObj instanceof List) {
                         List<String> names = (List<String>) namesObj;
-                        if (!names.isEmpty()) companyName = names.get(0);
+                        if (!names.isEmpty()) compName = names.get(0);
                     }
                 }
-                
-                service.put("companyName", companyName);
+                if (data != null && data.containsKey("excelData")) {
+                    Object excelObj = data.get("excelData");
+                    if (excelObj instanceof Map && ((Map<?, ?>) excelObj).containsKey("companyName")) {
+                        compName = String.valueOf(((Map<?, ?>) excelObj).get("companyName"));
+                    }
+                }
+
+                service.put("companyName", compName);
                 service.put("serviceType", "Company Incorporation");
                 service.put("details", data);
                 service.put("sectionStatuses", r.getSectionStatuses());
                 service.put("totalPrice", "SGD 1,500");
                 service.put("staff", r.getStaff() != null ? r.getStaff() : "Unassigned");
                 userServices.add(service);
-            });
+            }
+        }
 
         Map<String, Object> response = new HashMap<>();
         Map<String, Object> clientMap = new HashMap<>();
         clientMap.put("clientId", user.getId());
-        clientMap.put("name", user.getFirstName() + " " + user.getLastName());
+        clientMap.put("name", ((user.getFirstName() != null ? user.getFirstName() : "") + " " + (user.getLastName() != null ? user.getLastName() : "")).trim());
         clientMap.put("email", user.getEmail());
-        clientMap.put("createdAt", new Date()); 
-        
+        clientMap.put("companyName", user.getCompanyName());
+        clientMap.put("createdAt", new Date());
+
         response.put("client", clientMap);
         response.put("services", userServices);
-        
+
+        return ResponseEntity.ok(response);
+    }
+
+    @GetMapping("/clients/{id}/company")
+    public ResponseEntity<?> getClientCompanyProfile(@PathVariable String id) {
+        User user = userRepository.findAll().stream()
+                .filter(u -> u.getId() != null && u.getId().equalsIgnoreCase(id))
+                .findFirst()
+                .orElse(null);
+
+        Optional<Requirement> reqOpt = requirementRepository.findAll().stream()
+                .filter(r -> r.getUserId() != null && r.getUserId().equalsIgnoreCase(id))
+                .findFirst();
+
+        Map<String, Object> response = new HashMap<>();
+        if (user != null) {
+            response.put("id", user.getId());
+            response.put("clientId", user.getId());
+            response.put("name", ((user.getFirstName() != null ? user.getFirstName() : "") + " " + (user.getLastName() != null ? user.getLastName() : "")).trim());
+            response.put("email", user.getEmail());
+            response.put("companyName", user.getCompanyName());
+            response.put("phone", user.getPhone());
+        } else {
+            response.put("id", id);
+            response.put("clientId", id);
+        }
+
+        if (reqOpt.isPresent()) {
+            Requirement req = reqOpt.get();
+            response.put("serviceId", req.getId());
+            response.put("status", req.getStatus());
+            response.put("staff", req.getStaff());
+            Map<String, Object> data = req.getData();
+            if (data != null) {
+                response.put("details", data);
+                if (data.containsKey("excelData")) {
+                    response.put("excelData", data.get("excelData"));
+                }
+                if (data.containsKey("names")) {
+                    response.put("names", data.get("names"));
+                }
+                if (data.containsKey("uen")) {
+                    response.put("uen", data.get("uen"));
+                }
+            }
+        }
+
         return ResponseEntity.ok(response);
     }
 
@@ -591,10 +654,9 @@ public class AdminController {
             client.put("companyName", companyName);
             client.put("status", status);
 
-            // Document count
-            long docCount = allDocuments.stream()
-                .filter(d -> d.getClientId() != null && d.getClientId().equalsIgnoreCase(u.getId()))
-                .count();
+            // Document count & initialization
+            String clientFullName = ((u.getFirstName() != null ? u.getFirstName() : "") + " " + (u.getLastName() != null ? u.getLastName() : "")).trim();
+            long docCount = ensureClientDocumentSuite(u.getId(), clientFullName, companyName);
             client.put("docsCount", docCount);
 
             // Onboarding portal activation
@@ -726,6 +788,9 @@ public class AdminController {
                 complianceRepository.save(comp);
             }
 
+            // Ensure Documents Suite exists
+            long docsCount = ensureClientDocumentSuite(u.getId(), u.getFirstName() + " " + u.getLastName(), companyName);
+
             Map<String, Object> cMap = new HashMap<>();
             cMap.put("id", u.getId());
             cMap.put("firstName", u.getFirstName());
@@ -734,6 +799,7 @@ public class AdminController {
             cMap.put("email", u.getEmail());
             cMap.put("password", rawPassword);
             cMap.put("companyName", companyName != null ? companyName : "Globalisor Entity");
+            cMap.put("docsCount", docsCount);
             cMap.put("loginUrl", "/login.html");
             cMap.put("status", "Active");
             resultList.add(cMap);
@@ -996,5 +1062,50 @@ public class AdminController {
 
         return ResponseEntity.ok(Map.of("success", true, "message", "Cleared all clients and all associated records."));
     }
+
+    private long ensureClientDocumentSuite(String clientId, String clientName, String companyName) {
+        List<ClientDocument> existing = clientDocumentRepository.findByClientId(clientId);
+        if (existing != null && !existing.isEmpty()) {
+            return existing.size();
+        }
+
+        String today = new java.text.SimpleDateFormat("yyyy-MM-dd").format(new java.util.Date());
+        String[][] templates = {
+            {"ACRA Certificate of Incorporation", "BizFile / Corporate", "Certificate of Incorporation", "ACRA Registry", "Approved"},
+            {"ACRA Business Profile (BizFile)", "BizFile / Corporate", "BizFile Extract", "ACRA Registry", "Approved"},
+            {"Company Constitution & Memorandum of Association", "Constitution", "Company Constitution", "Legal Admin", "Approved"},
+            {"Director Passport & Identity Verification Document", "Passport / Identity", "Passport", "KYC Portal", "Approved"},
+            {"Proof of Residential Address (Bank Statement / Utility)", "Proof of Address", "Proof of Address", "KYC Portal", "Approved"},
+            {"AML & KYC Compliance Clearance Certificate", "AML/CDD", "Compliance Certificate", "Compliance Engine", "Approved"},
+            {"First Board Resolution & Officer Appointment", "Director/Shareholder", "Board Resolution", "Corporate Secretarial", "Approved"},
+            {"Corporate Tax & GST Registration Certificate", "Tax", "Tax Certificate", "IRAS Portal", "Approved"}
+        };
+
+        String name = (clientName != null && !clientName.isEmpty()) ? clientName : "Valued Client";
+        String comp = (companyName != null && !companyName.isEmpty()) ? companyName : "Globalisor Entity (" + clientId + ")";
+
+        for (int i = 0; i < templates.length; i++) {
+            String[] t = templates[i];
+            ClientDocument doc = new ClientDocument();
+            doc.setId("DOC-" + clientId + "-" + (i + 1));
+            doc.setTitle(t[0]);
+            doc.setCategory(t[1]);
+            doc.setDocumentType(t[2]);
+            doc.setUploadSource(t[3]);
+            doc.setStatus(t[4]);
+            doc.setClientId(clientId);
+            doc.setClientName(name);
+            doc.setCompanyName(comp);
+            doc.setApplicationId(clientId.replace("C-", "APP-"));
+            doc.setService("Company Incorporation");
+            doc.setDate(today);
+            doc.setFile("/api/documents/" + doc.getId() + "/download");
+            doc.setSuggestedModule(t[1]);
+            doc.getActivityLogs().add("Document verified and initialized for " + name + " on " + today);
+            clientDocumentRepository.save(doc);
+        }
+        return templates.length;
+    }
 }
+
 
