@@ -83,6 +83,7 @@ public class WebSecurityConfig {
                         .requestMatchers("/api/countries/**").permitAll()
                         .requestMatchers("/api/kyc/**").permitAll()
                         .requestMatchers("/api/compliance/**").permitAll()
+                        .requestMatchers("/api/compliance-events", "/api/compliance-events/**").permitAll()
                         .requestMatchers("/api/documents/**").permitAll()
                         .requestMatchers("/api/notifications/**").permitAll()
                         .requestMatchers("/api/messages/**", "/api/ws/**").permitAll()
