@@ -27,7 +27,7 @@ public class Task {
     @Id
     private String id;
 
-    @Indexed(unique = true)
+    @Indexed
     private String ticketNumber; // e.g. TSK-1001
 
     @Indexed

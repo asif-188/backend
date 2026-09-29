@@ -144,6 +144,14 @@ public class PreRegSectionController {
             }
         }
 
+        // Ensure dummy checkout sections are removed if they exist
+        if (preRegSectionRepository.existsById("sec-checkout")) {
+            preRegSectionRepository.deleteById("sec-checkout");
+        }
+        if (preRegSectionRepository.existsById("sec-checkout-foreigner")) {
+            preRegSectionRepository.deleteById("sec-checkout-foreigner");
+        }
+
         List<PreRegSection> locals = preRegSectionRepository.findByJourneyType("LOCAL");
         if (locals.isEmpty()) {
             List<PreRegSection> defaults = new ArrayList<>();
@@ -195,9 +203,6 @@ public class PreRegSectionController {
                 createField("contact.email", "Email ID", "text", true, "email@example.com", null)
             );
             defaults.add(new PreRegSection("sec-package-next", "contact", "Your package is up Next", "Provide your contact information for package processing", "form", 5, contactFields, "LOCAL"));
-
-            // 6. Package Summary & Payment
-            defaults.add(new PreRegSection("sec-checkout", "checkout", "Package Summary & Payment", "Review your details, select packages, and complete payment", "form", 6, new ArrayList<>(), "LOCAL"));
 
             preRegSectionRepository.saveAll(defaults);
         }
@@ -253,9 +258,6 @@ public class PreRegSectionController {
                 createField("contact.email", "Email ID", "text", true, "email@example.com", null)
             );
             defaults.add(new PreRegSection("sec-package-next-foreigner", "contact", "Your package is up Next", "Provide your contact information for package processing", "form", 5, contactFields, "FOREIGNER"));
-
-            // 6. Package Summary & Payment
-            defaults.add(new PreRegSection("sec-checkout-foreigner", "checkout", "Package Summary & Payment", "Review your details, select packages, and complete payment", "form", 6, new ArrayList<>(), "FOREIGNER"));
 
             preRegSectionRepository.saveAll(defaults);
         }

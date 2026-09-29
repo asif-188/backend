@@ -10,7 +10,7 @@ spring:
     mongodb:
       uri: ${SPRING_DATA_MONGODB_URI:mongodb+srv://greenbridge_db_user:Pass%40green@globalisor.m4zuxpm.mongodb.net/globalisor?appName=globalisor}
       database: ${SPRING_DATA_MONGODB_DATABASE:globalisor}
-      auto-index-creation: true
+      auto-index-creation: false
 
 server:
   port: ${PORT:8080}

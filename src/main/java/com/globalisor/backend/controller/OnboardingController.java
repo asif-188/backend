@@ -9,6 +9,7 @@ import com.globalisor.backend.repository.UserRepository;
 import com.globalisor.backend.repository.RequirementRepository;
 import com.globalisor.backend.model.Requirement;
 import com.globalisor.backend.service.NotificationService;
+import com.globalisor.backend.service.EmailService;
 import com.globalisor.backend.websocket.ChatWebSocketHandler;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -429,7 +430,9 @@ public class OnboardingController {
         return ResponseEntity.ok(saved);
     }
 
-    // POST activate portal (admin only)
+    @Autowired EmailService emailService;
+
+    // POST activate portal (admin/staff)
     @PostMapping("/{id}/activate")
     public ResponseEntity<?> activatePortal(@PathVariable String id,
                                             @RequestBody Map<String, Object> body) {
@@ -446,12 +449,37 @@ public class OnboardingController {
 
         Onboarding saved = onboardingRepository.save(ob);
 
-        // Notify client
+        // Activate user account and retrieve credentials
+        String clientEmail = ob.getClientEmail();
+        String clientName = ob.getClientName() != null ? ob.getClientName() : "Valued Client";
+        String plainPassword = "password123";
+
+        Optional<User> userOpt = userRepository.findById(ob.getClientId());
+        if (userOpt.isPresent()) {
+            User u = userOpt.get();
+            if ("PENDING_APPROVAL".equals(u.getStatus())) {
+                u.setStatus("ACTIVE");
+                userRepository.save(u);
+            }
+            if (u.getEmail() != null && !u.getEmail().isEmpty()) {
+                clientEmail = u.getEmail();
+            }
+            if (u.getPlainPassword() != null && !u.getPlainPassword().isEmpty()) {
+                plainPassword = u.getPlainPassword();
+            }
+        }
+
+        // Notify client via internal notification
         try {
             notificationService.sendNotification(ob.getClientId(),
                     "🎉 Your Client Portal is Now Active!",
-                    "Congratulations! Your onboarding is complete. All portal sections are now available.",
+                    "Congratulations! Your onboarding has been validated and approved. All portal sections are now unlocked.",
                     "onboarding", saved.getId(), "Info");
+        } catch (Exception ignored) {}
+
+        // Dispatch official Email with Portal URL & Credentials
+        try {
+            emailService.sendPortalActivationEmail(clientEmail, clientName, plainPassword, "/login.html");
         } catch (Exception ignored) {}
 
         // WS broadcast
@@ -460,7 +488,7 @@ public class OnboardingController {
         event.put("clientId", ob.getClientId());
         chatWebSocketHandler.broadcastEvent(event);
 
-        return ResponseEntity.ok(Map.of("success", true, "message", "Portal activated successfully"));
+        return ResponseEntity.ok(Map.of("success", true, "message", "Portal activated successfully and credentials sent to client"));
     }
 
     private Map<String, Object> callGeminiApi(String docType, String base64Data, String mimeType) {

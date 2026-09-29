@@ -140,6 +140,9 @@ public class RequirementController {
             requirement.setUpdatedAt(new java.util.Date());
             requirementRepository.save(requirement);
             
+            Optional<User> userOpt = userRepository.findById(userDetails.getId());
+            userOpt.ifPresent(user -> syncWithOnboardingAndKyc(user, requirement.getData(), requirement));
+            
             try {
                 // Admin notification
                 notificationService.sendNotification(
@@ -317,28 +320,7 @@ public class RequirementController {
         }
 
         // 3. Ensure Onboarding record exists
-        Optional<Onboarding> onboardingOpt = onboardingRepository.findByClientId(clientUser.getId());
-        if (!onboardingOpt.isPresent()) {
-            Onboarding onboarding = new Onboarding();
-            onboarding.setClientId(clientUser.getId());
-            onboarding.setClientEmail(clientUser.getEmail());
-            onboarding.setClientName(clientUser.getFirstName() + " " + clientUser.getLastName());
-            onboarding.setStatus("in_progress");
-            onboarding.setPortalActivated(false);
-            if (data.containsKey("journeyType")) {
-                onboarding.setJourneyType(String.valueOf(data.get("journeyType")));
-            }
-            onboarding.getAuditLogs().add("Onboarding initiated on pre-registration submission at " + new Date());
-            onboardingRepository.save(onboarding);
-        } else {
-            Onboarding onboarding = onboardingOpt.get();
-            if (data.containsKey("journeyType")) {
-                onboarding.setJourneyType(String.valueOf(data.get("journeyType")));
-                onboardingRepository.save(onboarding);
-            }
-        }
-
-        // 4. Save the Requirement record (pre-registration application)
+        // 3. Save the Requirement record (pre-registration application)
         Optional<Requirement> reqOpt = requirementRepository.findByUserId(clientUser.getId());
         Requirement requirement;
         if (reqOpt.isPresent()) {
@@ -351,6 +333,9 @@ public class RequirementController {
             requirement.setStatus("under review");
         }
         requirementRepository.save(requirement);
+
+        // 4. Synchronize with Onboarding and KYC records
+        syncWithOnboardingAndKyc(clientUser, data, requirement);
 
         // 5. Notify admin/staff
         try {
@@ -376,5 +361,85 @@ public class RequirementController {
         response.put("clientId", clientUser.getId());
         
         return ResponseEntity.ok(response);
+    }
+
+    private void syncWithOnboardingAndKyc(User clientUser, Map<String, Object> data, Requirement requirement) {
+        if (clientUser == null || data == null) return;
+        try {
+            Optional<Onboarding> onboardingOpt = onboardingRepository.findByClientId(clientUser.getId());
+            Onboarding onboarding = onboardingOpt.orElseGet(() -> {
+                Onboarding ob = new Onboarding();
+                ob.setClientId(clientUser.getId());
+                ob.setClientEmail(clientUser.getEmail());
+                ob.setClientName(clientUser.getFirstName() + " " + clientUser.getLastName());
+                return ob;
+            });
+
+            onboarding.setStatus("submitted");
+            onboarding.setPortalActivated(false);
+            if (data.containsKey("journeyType")) {
+                onboarding.setJourneyType(String.valueOf(data.get("journeyType")));
+            }
+
+            // Sync Directors
+            if (data.containsKey("directors")) {
+                Onboarding.OnboardingStep dirStep = onboarding.getStep2DirectorDetails();
+                dirStep.setStatus("submitted");
+                Map<String, Object> dirData = new HashMap<>();
+                dirData.put("directors", data.get("directors"));
+                dirStep.setData(dirData);
+            }
+
+            // Sync Share Capital
+            if (data.containsKey("capital")) {
+                Onboarding.OnboardingStep capStep = onboarding.getStepShareCapital();
+                capStep.setStatus("submitted");
+                if (data.get("capital") instanceof Map) {
+                    capStep.setData((Map<String, Object>) data.get("capital"));
+                }
+            }
+
+            // Sync Shareholders
+            if (data.containsKey("shareholders")) {
+                Onboarding.OnboardingStep indShStep = onboarding.getStep3IndividualShareholder();
+                indShStep.setStatus("submitted");
+                Map<String, Object> indData = new HashMap<>();
+                indData.put("shareholders", data.get("shareholders"));
+                indShStep.setData(indData);
+
+                Onboarding.OnboardingStep corpShStep = onboarding.getStep4CorporateShareholder();
+                corpShStep.setStatus("submitted");
+                corpShStep.setData(indData);
+            }
+
+            // Sync Declarations & Contact
+            if (data.containsKey("contact")) {
+                Onboarding.OnboardingStep declStep = onboarding.getStep7FinalDeclaration();
+                declStep.setStatus("submitted");
+                Map<String, Object> declData = new HashMap<>();
+                declData.put("contact", data.get("contact"));
+                declStep.setData(declData);
+            }
+
+            onboarding.getAuditLogs().add("Pre-registration submitted with full director, shareholder, and document details at " + new Date());
+            onboardingRepository.save(onboarding);
+
+            // Sync KYC
+            Optional<Kyc> kycOpt = kycRepository.findByClientId(clientUser.getId());
+            Kyc kyc = kycOpt.orElseGet(() -> {
+                Kyc k = new Kyc();
+                k.setId("KYC-" + System.currentTimeMillis());
+                k.setClientId(clientUser.getId());
+                return k;
+            });
+            kyc.setName(clientUser.getFirstName() + " " + clientUser.getLastName());
+            kyc.setStatus("pending");
+            kyc.setRisk("Low");
+            kyc.setLastUpdated(System.currentTimeMillis());
+            kyc.getAuditLogs().add("KYC profile submitted with pre-registration documentation at " + new Date());
+            kycRepository.save(kyc);
+        } catch (Exception ex) {
+            System.err.println("Error syncing with onboarding and kyc: " + ex.getMessage());
+        }
     }
 }
