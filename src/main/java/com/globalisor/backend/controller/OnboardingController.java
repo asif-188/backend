@@ -48,7 +48,7 @@ public class OnboardingController {
     // GET onboarding by client id
     @GetMapping("/client/{clientId}")
     public ResponseEntity<?> getByClientId(@PathVariable String clientId) {
-        Optional<Onboarding> opt = onboardingRepository.findByClientId(clientId);
+        Optional<Onboarding> opt = onboardingRepository.findFirstByClientIdOrderByCreatedAtDesc(clientId);
         Onboarding ob;
         boolean isNew = false;
         if (opt.isPresent()) {
@@ -69,7 +69,7 @@ public class OnboardingController {
         }
 
         // Fetch requirement data for this client
-        Optional<Requirement> reqOpt = requirementRepository.findByUserId(clientId);
+        Optional<Requirement> reqOpt = requirementRepository.findFirstByUserIdOrderByUpdatedAtDesc(clientId);
         if (reqOpt.isPresent()) {
             Requirement requirement = reqOpt.get();
             Map<String, Object> reqData = requirement.getData();
@@ -254,7 +254,7 @@ public class OnboardingController {
     // GET portal activation status
     @GetMapping("/client/{clientId}/status")
     public ResponseEntity<?> getPortalStatus(@PathVariable String clientId) {
-        Optional<Onboarding> opt = onboardingRepository.findByClientId(clientId);
+        Optional<Onboarding> opt = onboardingRepository.findFirstByClientIdOrderByCreatedAtDesc(clientId);
         Map<String, Object> result = new HashMap<>();
         if (opt.isPresent()) {
             result.put("portalActivated", opt.get().isPortalActivated());
@@ -273,7 +273,7 @@ public class OnboardingController {
     @PostMapping("/client/{clientId}")
     public ResponseEntity<Onboarding> createOrUpdate(@PathVariable String clientId,
                                                       @RequestBody Map<String, Object> body) {
-        Optional<Onboarding> opt = onboardingRepository.findByClientId(clientId);
+        Optional<Onboarding> opt = onboardingRepository.findFirstByClientIdOrderByCreatedAtDesc(clientId);
         Onboarding ob = opt.orElseGet(() -> {
             Onboarding n = new Onboarding();
             n.setClientId(clientId);

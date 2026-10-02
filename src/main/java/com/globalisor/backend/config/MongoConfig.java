@@ -33,7 +33,21 @@ public class MongoConfig {
 
     @Bean
     public MongoClient mongoClient() {
-        return MongoClients.create(mongoUri);
+        com.mongodb.ConnectionString connectionString = new com.mongodb.ConnectionString(mongoUri);
+        com.mongodb.MongoClientSettings settings = com.mongodb.MongoClientSettings.builder()
+                .applyConnectionString(connectionString)
+                .applyToConnectionPoolSettings(builder -> builder
+                        .maxConnectionIdleTime(60, java.util.concurrent.TimeUnit.SECONDS)
+                        .maxWaitTime(10, java.util.concurrent.TimeUnit.SECONDS)
+                        .maxSize(50)
+                        .minSize(5))
+                .applyToSocketSettings(builder -> builder
+                        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS))
+                .applyToClusterSettings(builder -> builder
+                        .serverSelectionTimeout(15, java.util.concurrent.TimeUnit.SECONDS))
+                .build();
+        return MongoClients.create(settings);
     }
 
     @Bean

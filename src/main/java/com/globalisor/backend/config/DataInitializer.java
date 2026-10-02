@@ -92,7 +92,7 @@ public class DataInitializer implements CommandLineRunner {
                 guest.setRole("USER");
                 userRepository.save(guest);
 
-                if (requirementRepository.findByUserId("C-GUEST").isEmpty()) {
+                if (requirementRepository.findFirstByUserId("C-GUEST").isEmpty()) {
                     Map<String, Object> data = new HashMap<>();
                     data.put("names", Arrays.asList("Guest Venture Pte. Ltd."));
                     Requirement req = new Requirement("C-GUEST", data);

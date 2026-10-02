@@ -8,5 +8,7 @@ import java.util.Optional;
 
 @Repository
 public interface ComplianceRepository extends MongoRepository<Compliance, String> {
+    Optional<Compliance> findFirstByClientIdOrderByLastUpdatedDesc(String clientId);
+    Optional<Compliance> findFirstByClientId(String clientId);
     Optional<Compliance> findByClientId(String clientId);
 }

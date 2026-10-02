@@ -9,6 +9,8 @@ import java.util.Optional;
 
 @Repository
 public interface KycRepository extends MongoRepository<Kyc, String> {
+    Optional<Kyc> findFirstByClientIdOrderByLastUpdatedDesc(String clientId);
+    Optional<Kyc> findFirstByClientId(String clientId);
     Optional<Kyc> findByClientId(String clientId);
     List<Kyc> findByClientIdIn(List<String> clientIds);
     long countByStatus(String status);

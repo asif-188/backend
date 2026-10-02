@@ -182,7 +182,7 @@ public class MigrationController {
                     
                     if (strategy.equalsIgnoreCase("OVERWRITE") || strategy.equalsIgnoreCase("MERGE")) {
                         User existingUser = userRepository.findByEmail(encryptedEmail).get();
-                        Optional<Requirement> reqOpt = requirementRepository.findByUserId(existingUser.getId());
+                        Optional<Requirement> reqOpt = requirementRepository.findFirstByUserIdOrderByUpdatedAtDesc(existingUser.getId());
                         if (reqOpt.isPresent()) {
                             Requirement req = reqOpt.get();
                             if (strategy.equalsIgnoreCase("OVERWRITE")) {

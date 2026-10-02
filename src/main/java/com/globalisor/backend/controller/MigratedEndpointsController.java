@@ -341,7 +341,7 @@ public class MigratedEndpointsController {
         Kyc saved = kycRepository.save(kyc);
 
         // Also update matching Compliance record to sync statuses
-        Optional<Compliance> compOpt = complianceRepository.findByClientId(kyc.getClientId());
+        Optional<Compliance> compOpt = complianceRepository.findFirstByClientIdOrderByLastUpdatedDesc(kyc.getClientId());
         if (compOpt.isPresent()) {
             Compliance comp = compOpt.get();
             comp.setStatus(kyc.getStatus());
@@ -501,7 +501,7 @@ public class MigratedEndpointsController {
         }
 
         // Find or create KYC record
-        Optional<Kyc> kycOpt = kycRepository.findByClientId(clientId);
+        Optional<Kyc> kycOpt = kycRepository.findFirstByClientIdOrderByLastUpdatedDesc(clientId);
         Kyc kyc;
         if (kycOpt.isPresent()) {
             kyc = kycOpt.get();
@@ -573,7 +573,7 @@ public class MigratedEndpointsController {
         Kyc savedKyc = kycRepository.save(kyc);
 
         // Auto-sync client's primary Compliance record
-        Optional<Compliance> compOpt = complianceRepository.findByClientId(clientId);
+        Optional<Compliance> compOpt = complianceRepository.findFirstByClientIdOrderByLastUpdatedDesc(clientId);
         if (compOpt.isPresent()) {
             Compliance comp = compOpt.get();
             comp.setAmlStatus(kyc.getAmlStatus());
@@ -1863,15 +1863,15 @@ public class MigratedEndpointsController {
         map.put("documents", docs);
 
         // Get application
-        Optional<Requirement> reqOpt = requirementRepository.findByUserId(id);
+        Optional<Requirement> reqOpt = requirementRepository.findFirstByUserIdOrderByUpdatedAtDesc(id);
         map.put("application", reqOpt.orElse(null));
 
         // Get KYC
-        Optional<Kyc> kycOpt = kycRepository.findByClientId(id);
+        Optional<Kyc> kycOpt = kycRepository.findFirstByClientIdOrderByLastUpdatedDesc(id);
         map.put("kyc", kycOpt.orElse(null));
 
         // Get Onboarding
-        Optional<Onboarding> obOpt = onboardingRepository.findByClientId(id);
+        Optional<Onboarding> obOpt = onboardingRepository.findFirstByClientIdOrderByCreatedAtDesc(id);
         map.put("onboarding", obOpt.orElse(null));
 
         return ResponseEntity.ok(map);

@@ -218,7 +218,7 @@ public class AdminController {
                     });
         }
 
-        Optional<Requirement> reqOpt = requirementRepository.findByUserId(id);
+        Optional<Requirement> reqOpt = requirementRepository.findFirstByUserIdOrderByUpdatedAtDesc(id);
         if (reqOpt.isEmpty()) {
             reqOpt = requirementRepository.findAll().stream()
                     .filter(r -> r.getUserId() != null && r.getUserId().equalsIgnoreCase(id))
@@ -287,7 +287,7 @@ public class AdminController {
                 .findFirst()
                 .orElse(null);
 
-        Optional<Requirement> reqOpt = requirementRepository.findByUserId(id);
+        Optional<Requirement> reqOpt = requirementRepository.findFirstByUserIdOrderByUpdatedAtDesc(id);
         if (reqOpt.isEmpty()) {
             reqOpt = requirementRepository.findAll().stream()
                     .filter(r -> r.getUserId() != null && r.getUserId().equalsIgnoreCase(id))
@@ -620,7 +620,7 @@ public class AdminController {
             req = requirementRepository.findById(id.replace("SRV-", "APP-"));
             if (req.isPresent()) return req;
         }
-        req = requirementRepository.findByUserId(id);
+        req = requirementRepository.findFirstByUserIdOrderByUpdatedAtDesc(id);
         if (req.isPresent()) return req;
         return Optional.empty();
     }
@@ -660,7 +660,7 @@ public class AdminController {
         // Fallback to Onboarding if standalone
         Optional<Onboarding> obOpt = onboardingRepository.findById(id);
         if (obOpt.isEmpty()) {
-            obOpt = onboardingRepository.findByClientId(id);
+            obOpt = onboardingRepository.findFirstByClientIdOrderByCreatedAtDesc(id);
         }
         if (obOpt.isPresent()) {
             Onboarding ob = obOpt.get();
@@ -758,7 +758,7 @@ public class AdminController {
 
         // Activate Onboarding and unlock Client Portal
         try {
-            Optional<Onboarding> obOpt = onboardingRepository.findByClientId(req.getUserId());
+            Optional<Onboarding> obOpt = onboardingRepository.findFirstByClientIdOrderByCreatedAtDesc(req.getUserId());
             if (obOpt.isPresent()) {
                 Onboarding ob = obOpt.get();
                 ob.setStatus("approved");
@@ -855,7 +855,7 @@ public class AdminController {
 
         // Sync Onboarding status
         try {
-            Optional<Onboarding> obOpt = onboardingRepository.findByClientId(req.getUserId());
+            Optional<Onboarding> obOpt = onboardingRepository.findFirstByClientIdOrderByCreatedAtDesc(req.getUserId());
             if (obOpt.isPresent()) {
                 Onboarding ob = obOpt.get();
                 ob.setStatus("rejected");
@@ -1297,7 +1297,7 @@ public class AdminController {
             userRepository.save(u);
 
             // Ensure Onboarding Record is activated
-            Optional<Onboarding> obOpt = onboardingRepository.findByClientId(u.getId());
+            Optional<Onboarding> obOpt = onboardingRepository.findFirstByClientIdOrderByCreatedAtDesc(u.getId());
             if (obOpt.isEmpty()) {
                 Onboarding ob = new Onboarding();
                 ob.setClientId(u.getId());
@@ -1318,7 +1318,7 @@ public class AdminController {
             }
 
             // Ensure KYC profile exists
-            if (kycRepository.findByClientId(u.getId()).isEmpty()) {
+            if (kycRepository.findFirstByClientIdOrderByLastUpdatedDesc(u.getId()).isEmpty()) {
                 Kyc kyc = new Kyc();
                 kyc.setId("KYC-" + System.currentTimeMillis() + "-" + u.getId());
                 kyc.setClientId(u.getId());
@@ -1334,7 +1334,7 @@ public class AdminController {
             }
 
             // Ensure Compliance record exists
-            if (complianceRepository.findByClientId(u.getId()).isEmpty()) {
+            if (complianceRepository.findFirstByClientIdOrderByLastUpdatedDesc(u.getId()).isEmpty()) {
                 Compliance comp = new Compliance();
                 comp.setId("COMP-" + System.currentTimeMillis() + "-" + u.getId());
                 comp.setClientId(u.getId());
@@ -1590,12 +1590,12 @@ public class AdminController {
                 requirementRepository.deleteById(r.getId());
             }
         }
-        onboardingRepository.findByClientId(actualId).ifPresent(ob -> onboardingRepository.deleteById(ob.getId()));
-        onboardingRepository.findByClientId(id).ifPresent(ob -> onboardingRepository.deleteById(ob.getId()));
-        kycRepository.findByClientId(actualId).ifPresent(k -> kycRepository.deleteById(k.getId()));
-        kycRepository.findByClientId(id).ifPresent(k -> kycRepository.deleteById(k.getId()));
-        complianceRepository.findByClientId(actualId).ifPresent(c -> complianceRepository.deleteById(c.getId()));
-        complianceRepository.findByClientId(id).ifPresent(c -> complianceRepository.deleteById(c.getId()));
+        onboardingRepository.findFirstByClientIdOrderByCreatedAtDesc(actualId).ifPresent(ob -> onboardingRepository.deleteById(ob.getId()));
+        onboardingRepository.findFirstByClientIdOrderByCreatedAtDesc(id).ifPresent(ob -> onboardingRepository.deleteById(ob.getId()));
+        kycRepository.findFirstByClientIdOrderByLastUpdatedDesc(actualId).ifPresent(k -> kycRepository.deleteById(k.getId()));
+        kycRepository.findFirstByClientIdOrderByLastUpdatedDesc(id).ifPresent(k -> kycRepository.deleteById(k.getId()));
+        complianceRepository.findFirstByClientIdOrderByLastUpdatedDesc(actualId).ifPresent(c -> complianceRepository.deleteById(c.getId()));
+        complianceRepository.findFirstByClientIdOrderByLastUpdatedDesc(id).ifPresent(c -> complianceRepository.deleteById(c.getId()));
         if (clientDocumentRepository != null) {
             clientDocumentRepository.findByClientId(actualId).forEach(d -> clientDocumentRepository.deleteById(d.getId()));
             if (!actualId.equalsIgnoreCase(id)) {

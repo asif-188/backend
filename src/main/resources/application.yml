@@ -36,6 +36,7 @@ logging:
     org.apache.catalina: WARN
     org.apache.coyote: WARN
     org.apache.tomcat: WARN
+    org.mongodb.driver.cluster: WARN
     com.globalisor.backend: INFO
 
 globalisor:

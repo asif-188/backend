@@ -67,7 +67,7 @@ public class RequirementController {
         }
         UserDetailsImpl userDetails = (UserDetailsImpl) authentication.getPrincipal();
         
-        Optional<Requirement> req = requirementRepository.findByUserId(userDetails.getId());
+        Optional<Requirement> req = requirementRepository.findFirstByUserIdOrderByUpdatedAtDesc(userDetails.getId());
         if (req.isPresent()) {
             Map<String, Object> response = new HashMap<>();
             response.put("status", req.get().getStatus());
@@ -92,7 +92,7 @@ public class RequirementController {
         }
         UserDetailsImpl userDetails = (UserDetailsImpl) authentication.getPrincipal();
         
-        Optional<Requirement> reqOpt = requirementRepository.findByUserId(userDetails.getId());
+        Optional<Requirement> reqOpt = requirementRepository.findFirstByUserIdOrderByUpdatedAtDesc(userDetails.getId());
         Requirement requirement;
         boolean isNew = !reqOpt.isPresent();
         if (reqOpt.isPresent()) {
@@ -133,7 +133,7 @@ public class RequirementController {
         }
         UserDetailsImpl userDetails = (UserDetailsImpl) authentication.getPrincipal();
         
-        Optional<Requirement> reqOpt = requirementRepository.findByUserId(userDetails.getId());
+        Optional<Requirement> reqOpt = requirementRepository.findFirstByUserIdOrderByUpdatedAtDesc(userDetails.getId());
         if (reqOpt.isPresent()) {
             Requirement requirement = reqOpt.get();
             requirement.setStatus("under review");
@@ -199,7 +199,7 @@ public class RequirementController {
         }
         UserDetailsImpl userDetails = (UserDetailsImpl) authentication.getPrincipal();
 
-        Optional<Requirement> reqOpt = requirementRepository.findByUserId(userDetails.getId());
+        Optional<Requirement> reqOpt = requirementRepository.findFirstByUserIdOrderByUpdatedAtDesc(userDetails.getId());
         Requirement requirement;
         if (reqOpt.isPresent()) {
             requirement = reqOpt.get();
@@ -250,7 +250,7 @@ public class RequirementController {
         }
         UserDetailsImpl userDetails = (UserDetailsImpl) authentication.getPrincipal();
 
-        Optional<Requirement> reqOpt = requirementRepository.findByUserId(userDetails.getId());
+        Optional<Requirement> reqOpt = requirementRepository.findFirstByUserIdOrderByUpdatedAtDesc(userDetails.getId());
         if (reqOpt.isPresent()) {
             requirementRepository.delete(reqOpt.get());
             try {
@@ -335,9 +335,8 @@ public class RequirementController {
             complianceRepository.save(compliance);
         }
 
-        // 3. Ensure Onboarding record exists
         // 3. Save the Requirement record (pre-registration application)
-        Optional<Requirement> reqOpt = requirementRepository.findByUserId(clientUser.getId());
+        Optional<Requirement> reqOpt = requirementRepository.findFirstByUserIdOrderByUpdatedAtDesc(clientUser.getId());
         Requirement requirement;
         if (reqOpt.isPresent()) {
             requirement = reqOpt.get();
@@ -408,7 +407,7 @@ public class RequirementController {
     private void syncWithOnboardingAndKyc(User clientUser, Map<String, Object> data, Requirement requirement) {
         if (clientUser == null || data == null) return;
         try {
-            Optional<Onboarding> onboardingOpt = onboardingRepository.findByClientId(clientUser.getId());
+            Optional<Onboarding> onboardingOpt = onboardingRepository.findFirstByClientIdOrderByCreatedAtDesc(clientUser.getId());
             Onboarding onboarding = onboardingOpt.orElseGet(() -> {
                 Onboarding ob = new Onboarding();
                 ob.setClientId(clientUser.getId());
@@ -467,7 +466,7 @@ public class RequirementController {
             onboardingRepository.save(onboarding);
 
             // Sync KYC
-            Optional<Kyc> kycOpt = kycRepository.findByClientId(clientUser.getId());
+            Optional<Kyc> kycOpt = kycRepository.findFirstByClientIdOrderByLastUpdatedDesc(clientUser.getId());
             Kyc kyc = kycOpt.orElseGet(() -> {
                 Kyc k = new Kyc();
                 k.setId("KYC-" + System.currentTimeMillis());
