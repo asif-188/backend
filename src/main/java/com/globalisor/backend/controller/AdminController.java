@@ -719,6 +719,20 @@ public class AdminController {
             clientEmail = client.getEmail();
         }
 
+        // Activate Onboarding and unlock Client Portal
+        try {
+            Optional<Onboarding> obOpt = onboardingRepository.findByClientId(req.getUserId());
+            if (obOpt.isPresent()) {
+                Onboarding ob = obOpt.get();
+                ob.setStatus("approved");
+                ob.setPortalActivated(true);
+                ob.getAuditLogs().add("Application verified and approved by admin. Client portal access activated at " + new Date());
+                onboardingRepository.save(ob);
+            }
+        } catch (Exception obEx) {
+            System.err.println("Could not activate onboarding on approval: " + obEx.getMessage());
+        }
+
         // 2. Create Task in Kanban / Task Management
         try {
             com.globalisor.backend.model.Task task = new com.globalisor.backend.model.Task();
@@ -801,6 +815,20 @@ public class AdminController {
             u.setStatus("REJECTED");
             userRepository.save(u);
         });
+
+        // Sync Onboarding status
+        try {
+            Optional<Onboarding> obOpt = onboardingRepository.findByClientId(req.getUserId());
+            if (obOpt.isPresent()) {
+                Onboarding ob = obOpt.get();
+                ob.setStatus("rejected");
+                ob.setPortalActivated(false);
+                ob.getAuditLogs().add("Application marked as changes required by admin. Reason: " + reason + " at " + new Date());
+                onboardingRepository.save(ob);
+            }
+        } catch (Exception obEx) {
+            System.err.println("Could not update onboarding on rejection: " + obEx.getMessage());
+        }
 
         // Send notification to Client with reason
         try {

@@ -81,7 +81,7 @@ public class PreRegSectionController {
             }
             if (!hasPostalCode) {
                 List<Map<String, Object>> officeFields = new ArrayList<>();
-                officeFields.add(createFieldWithHint("office.useService", "Registered Address Option *", "select", true, "$480 per year", List.of("false:Yes I have Office Address", "true:Globalisor Address"), "Statutorily required. Real address in Singapore, mail scanned weekly."));
+                officeFields.add(createFieldWithHint("office.useService", "Registered Address Option *", "select", true, "$480 per year", List.of("false:Yes I have Office Address", "true:Corporate Secretary Address"), "Statutorily required. Real address in Singapore, mail scanned weekly."));
                 officeFields.add(createField("office.postalCode", "Postal Code", "text", true, "e.g. 079903", null));
                 officeFields.add(createField("office.block", "Block Number", "text", true, "e.g. 10", null));
                 officeFields.add(createField("office.streetName", "Street Name", "text", true, "e.g. Anson Road", null));
@@ -114,19 +114,19 @@ public class PreRegSectionController {
             }
         }
 
-        // Correct sec-office options to remove commas and split correctly
-        if (officeOpt.isPresent()) {
-            PreRegSection officeSec = officeOpt.get();
+        // Correct sec-office options to remove commas and split correctly, and use Corporate Secretary Address
+        List<PreRegSection> allSecs = preRegSectionRepository.findAll();
+        for (PreRegSection s : allSecs) {
             boolean needsCorrection = false;
-            List<Map<String, Object>> fields = officeSec.getFields();
+            List<Map<String, Object>> fields = s.getFields();
             if (fields != null) {
                 for (Map<String, Object> f : fields) {
                     if ("office.useService".equals(f.get("key"))) {
                         Object optsObj = f.get("options");
                         if (optsObj instanceof List) {
                             List<?> opts = (List<?>) optsObj;
-                            if (opts.size() > 2 || opts.stream().anyMatch(o -> o.toString().contains(","))) {
-                                f.put("options", List.of("false:Yes I have Office Address", "true:Globalisor Address"));
+                            if (opts.size() > 2 || opts.stream().anyMatch(o -> o.toString().contains(",") || o.toString().contains("Globalisor Address"))) {
+                                f.put("options", List.of("false:Yes I have Office Address", "true:Corporate Secretary Address"));
                                 needsCorrection = true;
                             }
                         }
@@ -134,13 +134,13 @@ public class PreRegSectionController {
                 }
             }
             if (needsCorrection) {
-                officeSec.setFields(fields);
-                if (officeSec.getPublishedData() != null) {
-                    Map<String, Object> newPublishData = new HashMap<>(officeSec.getPublishedData());
+                s.setFields(fields);
+                if (s.getPublishedData() != null) {
+                    Map<String, Object> newPublishData = new HashMap<>(s.getPublishedData());
                     newPublishData.put("fields", fields);
-                    officeSec.setPublishedData(newPublishData);
+                    s.setPublishedData(newPublishData);
                 }
-                preRegSectionRepository.save(officeSec);
+                preRegSectionRepository.save(s);
             }
         }
 
@@ -185,7 +185,7 @@ public class PreRegSectionController {
 
             // 4. Registered Office
             List<Map<String, Object>> officeFields = new ArrayList<>();
-            officeFields.add(createFieldWithHint("office.useService", "Registered Address Option *", "select", true, "$480 per year", List.of("false:Yes I have Office Address", "true:Globalisor Address"), "Statutorily required. Real address in Singapore, mail scanned weekly."));
+            officeFields.add(createFieldWithHint("office.useService", "Registered Address Option *", "select", true, "$480 per year", List.of("false:Yes I have Office Address", "true:Corporate Secretary Address"), "Statutorily required. Real address in Singapore, mail scanned weekly."));
             officeFields.add(createField("office.postalCode", "Postal Code", "text", true, "e.g. 079903", null));
             officeFields.add(createField("office.block", "Block Number", "text", true, "e.g. 10", null));
             officeFields.add(createField("office.streetName", "Street Name", "text", true, "e.g. Anson Road", null));
@@ -240,7 +240,7 @@ public class PreRegSectionController {
 
             // 4. Registered Office
             List<Map<String, Object>> officeFields = new ArrayList<>();
-            officeFields.add(createFieldWithHint("office.useService", "Registered Address Option *", "select", true, "$480 per year", List.of("false:Yes I have Office Address", "true:Globalisor Address"), "Statutorily required. Real address in Singapore, mail scanned weekly."));
+            officeFields.add(createFieldWithHint("office.useService", "Registered Address Option *", "select", true, "$480 per year", List.of("false:Yes I have Office Address", "true:Corporate Secretary Address"), "Statutorily required. Real address in Singapore, mail scanned weekly."));
             officeFields.add(createField("office.postalCode", "Postal Code", "text", true, "e.g. 079903", null));
             officeFields.add(createField("office.block", "Block Number", "text", true, "e.g. 10", null));
             officeFields.add(createField("office.streetName", "Street Name", "text", true, "e.g. Anson Road", null));
