@@ -1417,6 +1417,11 @@ public class MigratedEndpointsController {
             map.put("assignedStaffName", req.getAssignedStaffName());
 
             String status = req.getStatus() != null && !req.getStatus().trim().isEmpty() ? req.getStatus().trim() : "pending";
+            String sLower = status.toLowerCase();
+            // Do not show approved or completed applications (they are active in Clients portal)
+            if (sLower.contains("approved") || sLower.contains("completed")) {
+                continue;
+            }
             map.put("status", status);
 
             // Priority & Deadline
@@ -1453,6 +1458,13 @@ public class MigratedEndpointsController {
             }
             if (uId != null) processedClientIds.add(uId);
 
+            String status = ob.getStatus() != null && !ob.getStatus().trim().isEmpty() ? ob.getStatus().trim() : "in_progress";
+            String sLower = status.toLowerCase();
+            // Do not show approved or completed onboarding (they are active in Clients portal)
+            if (sLower.contains("approved") || sLower.contains("completed")) {
+                continue;
+            }
+
             Map<String, Object> map = new HashMap<>();
             map.put("id", ob.getId() != null ? ob.getId() : ("ONB-" + System.currentTimeMillis()));
             map.put("rawId", ob.getId());
@@ -1475,9 +1487,7 @@ public class MigratedEndpointsController {
             map.put("assignedStaffId", null);
             map.put("assignedStaffName", "Unassigned");
 
-            String status = ob.getStatus() != null && !ob.getStatus().trim().isEmpty() ? ob.getStatus().trim() : "in_progress";
             map.put("status", status);
-
             map.put("priority", "Normal");
             map.put("deadline", "N/A");
 
