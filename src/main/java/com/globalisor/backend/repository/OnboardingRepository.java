@@ -12,4 +12,6 @@ public interface OnboardingRepository extends MongoRepository<Onboarding, String
     java.util.List<Onboarding> findAllByOrderByCreatedAtDesc();
     @org.springframework.data.mongodb.repository.Query(value = "{}", fields = "{ 'id': 1, 'clientId': 1, 'displayClientId': 1, 'clientEmail': 1, 'clientName': 1, 'journeyType': 1, 'status': 1, 'progressPercent': 1, 'createdAt': 1, 'updatedAt': 1 }")
     java.util.List<Onboarding> findAllLightweight();
+    @org.springframework.data.mongodb.repository.Query(value = "{ 'status': { $nin: ['approved', 'Approved', 'APPROVED', 'completed', 'Completed', 'COMPLETED'] } }", fields = "{ 'id': 1, 'clientId': 1, 'displayClientId': 1, 'clientEmail': 1, 'clientName': 1, 'journeyType': 1, 'status': 1, 'progressPercent': 1, 'createdAt': 1, 'updatedAt': 1 }")
+    java.util.List<Onboarding> findActiveLightweight();
 }

@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 import com.globalisor.backend.websocket.ChatWebSocketHandler;
@@ -1354,48 +1355,82 @@ public class MigratedEndpointsController {
     // --- APPLICATION ENDPOINTS ---
     @GetMapping("/applications")
     public ResponseEntity<List<Map<String, Object>>> getAllApplications() {
-        List<Requirement> requirements = requirementRepository.findAllLightweight();
-        List<Onboarding> onboardings = onboardingRepository.findAllLightweight();
+        List<Requirement> requirements = requirementRepository.findActiveLightweight();
+        List<Onboarding> onboardings = onboardingRepository.findActiveLightweight();
+
+        List<Requirement> activeRequirements = requirements.stream()
+                .filter(r -> {
+                    String s = r.getStatus() != null ? r.getStatus().toLowerCase() : "";
+                    return !s.contains("approved") && !s.contains("completed");
+                })
+                .collect(Collectors.toList());
+
+        List<Onboarding> activeOnboardings = onboardings.stream()
+                .filter(o -> {
+                    String s = o.getStatus() != null ? o.getStatus().toLowerCase() : "";
+                    return !s.contains("approved") && !s.contains("completed");
+                })
+                .collect(Collectors.toList());
 
         Set<String> allClientIds = new HashSet<>();
-        for (Requirement r : requirements) {
+        for (Requirement r : activeRequirements) {
             if (r.getUserId() != null && !r.getUserId().trim().isEmpty()) {
                 allClientIds.add(r.getUserId());
             }
         }
-        for (Onboarding o : onboardings) {
+        for (Onboarding o : activeOnboardings) {
             if (o.getClientId() != null && !o.getClientId().trim().isEmpty()) {
                 allClientIds.add(o.getClientId());
             }
         }
 
+        if (allClientIds.isEmpty()) {
+            return ResponseEntity.ok(Collections.emptyList());
+        }
+
         List<String> userIds = new ArrayList<>(allClientIds);
-        Map<String, User> userMap = new HashMap<>();
-        if (!userIds.isEmpty()) {
-            List<User> users = userRepository.findAllById(userIds);
-            userMap = users.stream().collect(Collectors.toMap(User::getId, u -> u, (a, b) -> a));
-        }
 
-        Map<String, Kyc> kycMap = new HashMap<>();
-        if (!userIds.isEmpty()) {
-            List<Kyc> kycRecords = kycRepository.findByClientIdIn(userIds);
-            kycMap = kycRecords.stream().collect(Collectors.toMap(Kyc::getClientId, k -> k, (a, b) -> a));
-        }
+        // Fetch User, KYC, and Document counts in parallel for optimal speed
+        CompletableFuture<Map<String, User>> usersFuture = CompletableFuture.supplyAsync(() -> {
+            try {
+                List<User> users = userRepository.findAllById(userIds);
+                return users.stream().collect(Collectors.toMap(User::getId, u -> u, (a, b) -> a));
+            } catch (Exception e) {
+                return new HashMap<>();
+            }
+        });
 
-        Map<String, Long> pendingDocCounts = new HashMap<>();
-        if (!userIds.isEmpty()) {
-            List<ClientDocument> documents = clientDocumentRepository.findLightweightByClientIdIn(userIds);
-            pendingDocCounts = documents.stream()
-                    .filter(d -> "pending".equalsIgnoreCase(d.getStatus()) && d.getClientId() != null)
-                    .collect(Collectors.groupingBy(ClientDocument::getClientId, Collectors.counting()));
-        }
+        CompletableFuture<Map<String, Kyc>> kycFuture = CompletableFuture.supplyAsync(() -> {
+            try {
+                List<Kyc> kycRecords = kycRepository.findByClientIdIn(userIds);
+                return kycRecords.stream().collect(Collectors.toMap(Kyc::getClientId, k -> k, (a, b) -> a));
+            } catch (Exception e) {
+                return new HashMap<>();
+            }
+        });
+
+        CompletableFuture<Map<String, Long>> docCountsFuture = CompletableFuture.supplyAsync(() -> {
+            try {
+                List<ClientDocument> documents = clientDocumentRepository.findLightweightByClientIdIn(userIds);
+                return documents.stream()
+                        .filter(d -> "pending".equalsIgnoreCase(d.getStatus()) && d.getClientId() != null)
+                        .collect(Collectors.groupingBy(ClientDocument::getClientId, Collectors.counting()));
+            } catch (Exception e) {
+                return new HashMap<>();
+            }
+        });
+
+        CompletableFuture.allOf(usersFuture, kycFuture, docCountsFuture).join();
+        Map<String, User> userMap = usersFuture.join();
+        Map<String, Kyc> kycMap = kycFuture.join();
+        Map<String, Long> pendingDocCounts = docCountsFuture.join();
 
         SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
         List<Map<String, Object>> apps = new ArrayList<>();
         Set<String> processedClientIds = new HashSet<>();
 
         // 1. Process Requirements (main submissions)
-        for (Requirement req : requirements) {
+        for (Requirement req : activeRequirements) {
             Map<String, Object> map = new HashMap<>();
             String uId = req.getUserId();
             if (uId != null) processedClientIds.add(uId);
@@ -1417,11 +1452,6 @@ public class MigratedEndpointsController {
             map.put("assignedStaffName", req.getAssignedStaffName());
 
             String status = req.getStatus() != null && !req.getStatus().trim().isEmpty() ? req.getStatus().trim() : "pending";
-            String sLower = status.toLowerCase();
-            // Do not show approved or completed applications (they are active in Clients portal)
-            if (sLower.contains("approved") || sLower.contains("completed")) {
-                continue;
-            }
             map.put("status", status);
 
             // Priority & Deadline
@@ -1451,7 +1481,7 @@ public class MigratedEndpointsController {
         }
 
         // 2. Process standalone Onboarding entries (ensure no client submission is missed)
-        for (Onboarding ob : onboardings) {
+        for (Onboarding ob : activeOnboardings) {
             String uId = ob.getClientId();
             if (uId != null && processedClientIds.contains(uId)) {
                 continue; // Already added via Requirement
@@ -1459,11 +1489,6 @@ public class MigratedEndpointsController {
             if (uId != null) processedClientIds.add(uId);
 
             String status = ob.getStatus() != null && !ob.getStatus().trim().isEmpty() ? ob.getStatus().trim() : "in_progress";
-            String sLower = status.toLowerCase();
-            // Do not show approved or completed onboarding (they are active in Clients portal)
-            if (sLower.contains("approved") || sLower.contains("completed")) {
-                continue;
-            }
 
             Map<String, Object> map = new HashMap<>();
             map.put("id", ob.getId() != null ? ob.getId() : ("ONB-" + System.currentTimeMillis()));
