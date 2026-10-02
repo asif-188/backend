@@ -553,7 +553,7 @@ public class AdminController {
         List<Requirement> pendingReqs = requirements.stream()
                 .filter(r -> {
                     String s = r.getStatus() != null ? r.getStatus().toLowerCase() : "";
-                    return s.contains("review") || s.contains("pending") || s.contains("submitted");
+                    return !s.contains("approved") && !s.contains("completed") && !s.contains("rejected");
                 })
                 .collect(Collectors.toList());
 
@@ -620,41 +620,78 @@ public class AdminController {
             req = requirementRepository.findById(id.replace("SRV-", "APP-"));
             if (req.isPresent()) return req;
         }
+        req = requirementRepository.findByUserId(id);
+        if (req.isPresent()) return req;
         return Optional.empty();
     }
 
     @GetMapping("/admin/applications/{id}")
     public ResponseEntity<?> getApplicationDetails(@PathVariable String id) {
         Optional<Requirement> reqOpt = findRequirementFlexible(id);
-        if (!reqOpt.isPresent()) {
-            return ResponseEntity.notFound().build();
+        if (reqOpt.isPresent()) {
+            Requirement req = reqOpt.get();
+            Map<String, Object> res = new HashMap<>();
+            res.put("id", req.getId());
+            res.put("userId", req.getUserId());
+            res.put("status", req.getStatus());
+            res.put("staff", req.getStaff());
+            res.put("assignedStaffId", req.getAssignedStaffId());
+            res.put("assignedStaffName", req.getAssignedStaffName());
+            res.put("rejectionReason", req.getRejectionReason());
+            res.put("reviewedAt", req.getReviewedAt());
+            res.put("createdAt", req.getCreatedAt());
+            res.put("updatedAt", req.getUpdatedAt());
+            res.put("data", req.getData());
+            res.put("sectionStatuses", req.getSectionStatuses());
+            
+            if (req.getUserId() != null) {
+                userRepository.findById(req.getUserId()).ifPresent(u -> {
+                    res.put("clientFirstName", u.getFirstName());
+                    res.put("clientLastName", u.getLastName());
+                    res.put("clientEmail", u.getEmail());
+                    res.put("clientPhone", u.getPhone());
+                    res.put("clientStatus", u.getStatus());
+                    res.put("clientCompanyName", u.getCompanyName());
+                });
+            }
+            return ResponseEntity.ok(res);
         }
-        Requirement req = reqOpt.get();
-        Map<String, Object> res = new HashMap<>();
-        res.put("id", req.getId());
-        res.put("userId", req.getUserId());
-        res.put("status", req.getStatus());
-        res.put("staff", req.getStaff());
-        res.put("assignedStaffId", req.getAssignedStaffId());
-        res.put("assignedStaffName", req.getAssignedStaffName());
-        res.put("rejectionReason", req.getRejectionReason());
-        res.put("reviewedAt", req.getReviewedAt());
-        res.put("createdAt", req.getCreatedAt());
-        res.put("updatedAt", req.getUpdatedAt());
-        res.put("data", req.getData());
-        res.put("sectionStatuses", req.getSectionStatuses());
-        
-        if (req.getUserId() != null) {
-            userRepository.findById(req.getUserId()).ifPresent(u -> {
-                res.put("clientFirstName", u.getFirstName());
-                res.put("clientLastName", u.getLastName());
-                res.put("clientEmail", u.getEmail());
-                res.put("clientPhone", u.getPhone());
-                res.put("clientStatus", u.getStatus());
-                res.put("clientCompanyName", u.getCompanyName());
-            });
+
+        // Fallback to Onboarding if standalone
+        Optional<Onboarding> obOpt = onboardingRepository.findById(id);
+        if (obOpt.isEmpty()) {
+            obOpt = onboardingRepository.findByClientId(id);
         }
-        return ResponseEntity.ok(res);
+        if (obOpt.isPresent()) {
+            Onboarding ob = obOpt.get();
+            Map<String, Object> res = new HashMap<>();
+            res.put("id", ob.getId());
+            res.put("userId", ob.getClientId());
+            res.put("status", ob.getStatus());
+            res.put("staff", "Unassigned");
+            res.put("assignedStaffId", null);
+            res.put("assignedStaffName", "Unassigned");
+            res.put("createdAt", ob.getCreatedAt());
+            res.put("updatedAt", ob.getUpdatedAt());
+            
+            Map<String, Object> synData = new HashMap<>();
+            synData.put("journeyType", ob.getJourneyType());
+            res.put("data", synData);
+
+            if (ob.getClientId() != null) {
+                userRepository.findById(ob.getClientId()).ifPresent(u -> {
+                    res.put("clientFirstName", u.getFirstName());
+                    res.put("clientLastName", u.getLastName());
+                    res.put("clientEmail", u.getEmail());
+                    res.put("clientPhone", u.getPhone());
+                    res.put("clientStatus", u.getStatus());
+                    res.put("clientCompanyName", u.getCompanyName());
+                });
+            }
+            return ResponseEntity.ok(res);
+        }
+
+        return ResponseEntity.notFound().build();
     }
 
     @PostMapping("/admin/applications/{id}/approve")

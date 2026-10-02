@@ -1354,86 +1354,210 @@ public class MigratedEndpointsController {
     // --- APPLICATION ENDPOINTS ---
     @GetMapping("/applications")
     public ResponseEntity<List<Map<String, Object>>> getAllApplications() {
-        List<Requirement> requirements = requirementRepository.findAll();
-        if (requirements.isEmpty()) {
-            return ResponseEntity.ok(Collections.emptyList());
+        List<Requirement> requirements = requirementRepository.findAllLightweight();
+        List<Onboarding> onboardings = onboardingRepository.findAllLightweight();
+
+        Set<String> allClientIds = new HashSet<>();
+        for (Requirement r : requirements) {
+            if (r.getUserId() != null && !r.getUserId().trim().isEmpty()) {
+                allClientIds.add(r.getUserId());
+            }
+        }
+        for (Onboarding o : onboardings) {
+            if (o.getClientId() != null && !o.getClientId().trim().isEmpty()) {
+                allClientIds.add(o.getClientId());
+            }
         }
 
-        List<String> userIds = requirements.stream()
-                .map(Requirement::getUserId)
-                .filter(Objects::nonNull)
-                .distinct()
-                .collect(Collectors.toList());
+        List<String> userIds = new ArrayList<>(allClientIds);
+        Map<String, User> userMap = new HashMap<>();
+        if (!userIds.isEmpty()) {
+            List<User> users = userRepository.findAllById(userIds);
+            userMap = users.stream().collect(Collectors.toMap(User::getId, u -> u, (a, b) -> a));
+        }
 
-        List<User> users = userRepository.findAllById(userIds);
-        Map<String, User> userMap = users.stream().collect(Collectors.toMap(User::getId, u -> u, (a, b) -> a));
+        Map<String, Kyc> kycMap = new HashMap<>();
+        if (!userIds.isEmpty()) {
+            List<Kyc> kycRecords = kycRepository.findByClientIdIn(userIds);
+            kycMap = kycRecords.stream().collect(Collectors.toMap(Kyc::getClientId, k -> k, (a, b) -> a));
+        }
 
-        List<Kyc> kycRecords = kycRepository.findByClientIdIn(userIds);
-        Map<String, Kyc> kycMap = kycRecords.stream().collect(Collectors.toMap(Kyc::getClientId, k -> k, (a, b) -> a));
+        Map<String, Long> pendingDocCounts = new HashMap<>();
+        if (!userIds.isEmpty()) {
+            List<ClientDocument> documents = clientDocumentRepository.findLightweightByClientIdIn(userIds);
+            pendingDocCounts = documents.stream()
+                    .filter(d -> "pending".equalsIgnoreCase(d.getStatus()) && d.getClientId() != null)
+                    .collect(Collectors.groupingBy(ClientDocument::getClientId, Collectors.counting()));
+        }
 
-        List<ClientDocument> documents = clientDocumentRepository.findByClientIdIn(userIds);
-        Map<String, Long> pendingDocCounts = documents.stream()
-                .filter(d -> "pending".equalsIgnoreCase(d.getStatus()) && d.getClientId() != null)
-                .collect(Collectors.groupingBy(ClientDocument::getClientId, Collectors.counting()));
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
+        List<Map<String, Object>> apps = new ArrayList<>();
+        Set<String> processedClientIds = new HashSet<>();
 
-        List<Map<String, Object>> apps = requirements.stream().map(req -> {
+        // 1. Process Requirements (main submissions)
+        for (Requirement req : requirements) {
             Map<String, Object> map = new HashMap<>();
-            
-            // Map ID: e.g. "SRV-1001" or ObjectId
-            map.put("id", req.getId());
-            map.put("rawId", req.getId());
-            map.put("data", req.getData());
-
-            // Extract company name
-            String companyName = "N/A";
-            Map<String, Object> data = req.getData();
-            if (data != null && data.containsKey("names")) {
-                Object namesObj = data.get("names");
-                if (namesObj instanceof List) {
-                    List<String> names = (List<String>) namesObj;
-                    if (!names.isEmpty()) companyName = names.get(0);
-                }
-            }
-            map.put("business", companyName);
-
-            // Find client
             String uId = req.getUserId();
+            if (uId != null) processedClientIds.add(uId);
+
+            map.put("id", req.getId() != null ? req.getId() : ("APP-" + System.currentTimeMillis()));
+            map.put("rawId", req.getId());
+            map.put("data", sanitizeSummaryData(req.getData()));
+
             User user = uId != null ? userMap.get(uId) : null;
-            map.put("client", user != null ? formatUserName(user) : "Unknown");
-            map.put("clientId", uId);
+            map.put("business", extractCompanyName(req.getData(), user));
+            map.put("client", extractApplicantName(req.getData(), user));
+            map.put("clientId", uId != null ? uId : "N/A");
 
             String staffAssigned = req.getAssignedStaffName() != null && !req.getAssignedStaffName().isEmpty() 
                     ? req.getAssignedStaffName() 
                     : (req.getStaff() != null && !req.getStaff().isEmpty() ? req.getStaff() : "Unassigned");
             map.put("staff", staffAssigned);
-            map.put("status", req.getStatus() != null ? req.getStatus() : "pending");
-            
+            map.put("assignedStaffId", req.getAssignedStaffId());
+            map.put("assignedStaffName", req.getAssignedStaffName());
+
+            String status = req.getStatus() != null && !req.getStatus().trim().isEmpty() ? req.getStatus().trim() : "pending";
+            map.put("status", status);
+
             // Priority & Deadline
             String priority = "Normal";
             String deadline = "N/A";
+            Map<String, Object> data = req.getData();
             if (data != null) {
-                if (data.containsKey("priority")) priority = (String) data.get("priority");
-                if (data.containsKey("deadline")) deadline = (String) data.get("deadline");
+                if (data.containsKey("priority") && data.get("priority") != null) priority = String.valueOf(data.get("priority"));
+                if (data.containsKey("deadline") && data.get("deadline") != null) deadline = String.valueOf(data.get("deadline"));
             }
             map.put("priority", priority);
             map.put("deadline", deadline);
 
-            // Find KYC status
+            // KYC status
             Kyc kyc = uId != null ? kycMap.get(uId) : null;
-            map.put("kyc", kyc != null ? capitalize(kyc.getStatus()) : "Approved");
+            map.put("kyc", kyc != null && kyc.getStatus() != null ? capitalize(kyc.getStatus()) : "Pending");
 
             // Documents status
             long pendingDocs = uId != null ? pendingDocCounts.getOrDefault(uId, 0L) : 0L;
             map.put("docs", pendingDocs > 0 ? pendingDocs + " Docs Pending" : "All Docs OK");
 
             // Date
-            SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
-            map.put("date", req.getUpdatedAt() != null ? sdf.format(req.getUpdatedAt()) : sdf.format(new Date()));
+            Date appDate = req.getUpdatedAt() != null ? req.getUpdatedAt() : (req.getCreatedAt() != null ? req.getCreatedAt() : new Date());
+            map.put("date", sdf.format(appDate));
 
-            return map;
-        }).collect(Collectors.toList());
+            apps.add(map);
+        }
+
+        // 2. Process standalone Onboarding entries (ensure no client submission is missed)
+        for (Onboarding ob : onboardings) {
+            String uId = ob.getClientId();
+            if (uId != null && processedClientIds.contains(uId)) {
+                continue; // Already added via Requirement
+            }
+            if (uId != null) processedClientIds.add(uId);
+
+            Map<String, Object> map = new HashMap<>();
+            map.put("id", ob.getId() != null ? ob.getId() : ("ONB-" + System.currentTimeMillis()));
+            map.put("rawId", ob.getId());
+            map.put("data", new HashMap<>());
+
+            User user = uId != null ? userMap.get(uId) : null;
+            String compName = ob.getDisplayClientId() != null ? ("Application " + ob.getDisplayClientId()) : "Incorporation Application";
+            if (user != null && user.getCompanyName() != null && !user.getCompanyName().trim().isEmpty() && !"N/A".equalsIgnoreCase(user.getCompanyName())) {
+                compName = user.getCompanyName().trim();
+            }
+            map.put("business", compName);
+
+            String clientName = ob.getClientName() != null && !ob.getClientName().trim().isEmpty()
+                    ? ob.getClientName().trim()
+                    : (user != null ? formatUserName(user) : "Applicant");
+            map.put("client", clientName);
+            map.put("clientId", uId != null ? uId : "N/A");
+
+            map.put("staff", "Unassigned");
+            map.put("assignedStaffId", null);
+            map.put("assignedStaffName", "Unassigned");
+
+            String status = ob.getStatus() != null && !ob.getStatus().trim().isEmpty() ? ob.getStatus().trim() : "in_progress";
+            map.put("status", status);
+
+            map.put("priority", "Normal");
+            map.put("deadline", "N/A");
+
+            Kyc kyc = uId != null ? kycMap.get(uId) : null;
+            map.put("kyc", kyc != null && kyc.getStatus() != null ? capitalize(kyc.getStatus()) : "Pending");
+
+            long pendingDocs = uId != null ? pendingDocCounts.getOrDefault(uId, 0L) : 0L;
+            map.put("docs", pendingDocs > 0 ? pendingDocs + " Docs Pending" : "All Docs OK");
+
+            Date obDate = ob.getCreatedAt() != null ? new Date(ob.getCreatedAt()) : (ob.getUpdatedAt() != null ? new Date(ob.getUpdatedAt()) : new Date());
+            map.put("date", sdf.format(obDate));
+
+            apps.add(map);
+        }
 
         return ResponseEntity.ok(apps);
+    }
+
+    private Map<String, Object> sanitizeSummaryData(Map<String, Object> data) {
+        if (data == null) return new HashMap<>();
+        Map<String, Object> summary = new HashMap<>();
+        if (data.containsKey("names")) summary.put("names", data.get("names"));
+        if (data.containsKey("nameChecks")) summary.put("nameChecks", data.get("nameChecks"));
+        if (data.containsKey("companySuffix")) summary.put("companySuffix", data.get("companySuffix"));
+        if (data.containsKey("journeyType")) summary.put("journeyType", data.get("journeyType"));
+        if (data.containsKey("priority")) summary.put("priority", data.get("priority"));
+        if (data.containsKey("deadline")) summary.put("deadline", data.get("deadline"));
+        if (data.containsKey("companyName")) summary.put("companyName", data.get("companyName"));
+        if (data.containsKey("contact")) {
+            Object cObj = data.get("contact");
+            if (cObj instanceof Map) {
+                summary.put("contact", new HashMap<>((Map<?, ?>) cObj));
+            }
+        }
+        return summary;
+    }
+
+    private String extractCompanyName(Map<String, Object> data, User user) {
+        if (data != null) {
+            if (data.containsKey("names")) {
+                Object namesObj = data.get("names");
+                if (namesObj instanceof List) {
+                    List<?> names = (List<?>) namesObj;
+                    if (!names.isEmpty() && names.get(0) != null && !String.valueOf(names.get(0)).trim().isEmpty()) {
+                        return String.valueOf(names.get(0)).trim();
+                    }
+                } else if (namesObj instanceof String && !((String) namesObj).trim().isEmpty()) {
+                    return ((String) namesObj).trim();
+                }
+            }
+            if (data.containsKey("companyName") && data.get("companyName") != null && !String.valueOf(data.get("companyName")).trim().isEmpty()) {
+                return String.valueOf(data.get("companyName")).trim();
+            }
+            if (data.containsKey("company_name") && data.get("company_name") != null && !String.valueOf(data.get("company_name")).trim().isEmpty()) {
+                return String.valueOf(data.get("company_name")).trim();
+            }
+        }
+        if (user != null && user.getCompanyName() != null && !user.getCompanyName().trim().isEmpty() && !"N/A".equalsIgnoreCase(user.getCompanyName())) {
+            return user.getCompanyName().trim();
+        }
+        return "Singapore Pte Ltd";
+    }
+
+    private String extractApplicantName(Map<String, Object> data, User user) {
+        if (user != null) {
+            String userName = formatUserName(user);
+            if (!"Unknown".equalsIgnoreCase(userName)) return userName;
+        }
+        if (data != null && data.containsKey("contact")) {
+            Object cObj = data.get("contact");
+            if (cObj instanceof Map) {
+                Map<?, ?> c = (Map<?, ?>) cObj;
+                String first = c.get("firstName") != null ? String.valueOf(c.get("firstName")).trim() : "";
+                String last = c.get("lastName") != null ? String.valueOf(c.get("lastName")).trim() : "";
+                String full = (first + " " + last).trim();
+                if (!full.isEmpty()) return full;
+                if (c.get("email") != null) return String.valueOf(c.get("email")).trim();
+            }
+        }
+        return "Applicant";
     }
 
     // --- REPORT ENDPOINTS ---

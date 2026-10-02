@@ -16,6 +16,8 @@ public interface ClientDocumentRepository extends MongoRepository<ClientDocument
     List<ClientDocument> findByCompanyName(String companyName);
     List<ClientDocument> findByCompanyNameIgnoreCase(String companyName);
     List<ClientDocument> findByClientIdIn(List<String> clientIds);
+    @org.springframework.data.mongodb.repository.Query(value = "{ 'clientId': { $in: ?0 } }", fields = "{ 'id': 1, 'clientId': 1, 'status': 1, 'title': 1, 'category': 1 }")
+    List<ClientDocument> findLightweightByClientIdIn(List<String> clientIds);
     List<ClientDocument> findByCategoryIgnoreCase(String category);
     List<ClientDocument> findBySubFolderIgnoreCase(String subFolder);
     Optional<ClientDocument> findFirstByTitleIgnoreCase(String title);

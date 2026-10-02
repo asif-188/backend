@@ -142,25 +142,41 @@ public class RequirementController {
             
             Optional<User> userOpt = userRepository.findById(userDetails.getId());
             userOpt.ifPresent(user -> syncWithOnboardingAndKyc(user, requirement.getData(), requirement));
-            
+
+            String compName = resolveProposedCompanyName(requirement.getData());
+            String applicantName = (userDetails.getFirstName() + " " + userDetails.getLastName()).trim();
+            if (applicantName.isEmpty()) applicantName = userDetails.getEmail();
+
             try {
                 // Admin notification
                 notificationService.sendNotification(
                         "admin",
-                        "New Pre-Registration Submission",
-                        userDetails.getFirstName() + " " + userDetails.getLastName() + " submitted pre-registration requirements.",
-                        "pre-registration",
+                        "New Application: " + compName,
+                        applicantName + " submitted a new incorporation application for " + compName + ".",
+                        "application",
                         requirement.getId(),
-                        "Info"
+                        "High",
+                        "applications.html"
+                );
+                // Staff notification
+                notificationService.sendNotification(
+                        "staff",
+                        "New Application: " + compName,
+                        applicantName + " submitted a new incorporation application for " + compName + ".",
+                        "application",
+                        requirement.getId(),
+                        "High",
+                        "applications.html"
                 );
                 // Client notification
                 notificationService.sendNotification(
                         userDetails.getId(),
                         "Application Submitted Successfully",
-                        "Your pre-registration requirements have been submitted successfully.",
-                        "pre-registration",
+                        "Your incorporation application for " + compName + " has been received and is currently under review.",
+                        "application",
                         requirement.getId(),
-                        "Info"
+                        "Info",
+                        "/client/portal.html"
                 );
             } catch (Exception e) {}
 
@@ -337,15 +353,41 @@ public class RequirementController {
         // 4. Synchronize with Onboarding and KYC records
         syncWithOnboardingAndKyc(clientUser, data, requirement);
 
-        // 5. Notify admin/staff
+        // 5. Notify admin/staff & client
+        String compName = resolveProposedCompanyName(data);
+        String applicantName = (firstName + " " + lastName).trim();
+        if (applicantName.isEmpty()) applicantName = email;
+
         try {
+            // Admin notification
             notificationService.sendNotification(
                     "admin",
-                    "New Pre-Registration Submission",
-                    clientUser.getFirstName() + " " + clientUser.getLastName() + " submitted pre-registration requirements.",
-                    "pre-registration",
+                    "New Application: " + compName,
+                    applicantName + " submitted a new incorporation application for " + compName + " (" + email + ").",
+                    "application",
                     requirement.getId(),
-                    "Info"
+                    "High",
+                    "applications.html"
+            );
+            // Staff notification
+            notificationService.sendNotification(
+                    "staff",
+                    "New Application: " + compName,
+                    applicantName + " submitted a new incorporation application for " + compName + " (" + email + ").",
+                    "application",
+                    requirement.getId(),
+                    "High",
+                    "applications.html"
+            );
+            // Client notification
+            notificationService.sendNotification(
+                    clientUser.getId(),
+                    "Application Submitted Successfully",
+                    "Your incorporation application for " + compName + " has been received and is currently under review.",
+                    "application",
+                    requirement.getId(),
+                    "Info",
+                    "/client/portal.html"
             );
         } catch (Exception e) {}
 
@@ -441,5 +483,26 @@ public class RequirementController {
         } catch (Exception ex) {
             System.err.println("Error syncing with onboarding and kyc: " + ex.getMessage());
         }
+    }
+
+    private String resolveProposedCompanyName(Map<String, Object> data) {
+        if (data != null && data.containsKey("names")) {
+            Object namesObj = data.get("names");
+            if (namesObj instanceof List && !((List<?>) namesObj).isEmpty()) {
+                Object first = ((List<?>) namesObj).get(0);
+                if (first != null && !String.valueOf(first).trim().isEmpty()) {
+                    return String.valueOf(first).trim();
+                }
+            } else if (namesObj instanceof String && !((String) namesObj).trim().isEmpty()) {
+                return ((String) namesObj).trim();
+            }
+        }
+        if (data != null && data.containsKey("companyName") && data.get("companyName") != null && !String.valueOf(data.get("companyName")).trim().isEmpty()) {
+            return String.valueOf(data.get("companyName")).trim();
+        }
+        if (data != null && data.containsKey("company_name") && data.get("company_name") != null && !String.valueOf(data.get("company_name")).trim().isEmpty()) {
+            return String.valueOf(data.get("company_name")).trim();
+        }
+        return "Singapore Pte Ltd";
     }
 }
