@@ -92,7 +92,24 @@ public class RequirementController {
         }
         UserDetailsImpl userDetails = (UserDetailsImpl) authentication.getPrincipal();
         
-        Optional<Requirement> reqOpt = requirementRepository.findFirstByUserIdOrderByUpdatedAtDesc(userDetails.getId());
+        normalizeSsicData(data);
+
+        String appId = data != null && data.get("applicationId") != null ? String.valueOf(data.get("applicationId")) : null;
+        Optional<Requirement> reqOpt = Optional.empty();
+        if (appId != null && !appId.trim().isEmpty() && !appId.startsWith("APP-")) {
+            reqOpt = requirementRepository.findById(appId);
+        }
+        if (!reqOpt.isPresent()) {
+            Optional<Requirement> latest = requirementRepository.findFirstByUserIdOrderByUpdatedAtDesc(userDetails.getId());
+            if (latest.isPresent()) {
+                String existingStatus = latest.get().getStatus() != null ? latest.get().getStatus().toLowerCase() : "";
+                // If existing application is already under review or approved/completed, create a separate new application
+                if (!existingStatus.contains("review") && !existingStatus.contains("approved") && !existingStatus.contains("completed")) {
+                    reqOpt = latest;
+                }
+            }
+        }
+
         Requirement requirement;
         boolean isNew = !reqOpt.isPresent();
         if (reqOpt.isPresent()) {
@@ -101,6 +118,9 @@ public class RequirementController {
             requirement.setUpdatedAt(new java.util.Date());
         } else {
             requirement = new Requirement(userDetails.getId(), data);
+            requirement.setStatus("pending");
+            requirement.setCreatedAt(new java.util.Date());
+            requirement.setUpdatedAt(new java.util.Date());
         }
         requirementRepository.save(requirement);
         
@@ -126,69 +146,98 @@ public class RequirementController {
     }
 
     @PostMapping("/submit")
-    public ResponseEntity<?> submitRequirement() {
+    public ResponseEntity<?> submitRequirement(@RequestBody(required = false) Map<String, Object> bodyData) {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication == null || !(authentication.getPrincipal() instanceof UserDetailsImpl)) {
             return ResponseEntity.status(401).body("Unauthorized");
         }
         UserDetailsImpl userDetails = (UserDetailsImpl) authentication.getPrincipal();
         
-        Optional<Requirement> reqOpt = requirementRepository.findFirstByUserIdOrderByUpdatedAtDesc(userDetails.getId());
+        Optional<Requirement> reqOpt = Optional.empty();
+        if (bodyData != null && bodyData.get("applicationId") != null) {
+            String appId = String.valueOf(bodyData.get("applicationId"));
+            if (!appId.startsWith("APP-")) {
+                reqOpt = requirementRepository.findById(appId);
+            }
+        }
+        if (!reqOpt.isPresent()) {
+            reqOpt = requirementRepository.findFirstByUserIdOrderByUpdatedAtDesc(userDetails.getId());
+        }
+
+        Requirement requirement;
         if (reqOpt.isPresent()) {
-            Requirement requirement = reqOpt.get();
+            requirement = reqOpt.get();
+            String existingStatus = requirement.getStatus() != null ? requirement.getStatus().toLowerCase() : "";
+            if (existingStatus.contains("approved") || existingStatus.contains("completed")) {
+                requirement = new Requirement(userDetails.getId(), bodyData != null ? bodyData : new HashMap<>());
+                requirement.setCreatedAt(new java.util.Date());
+            } else if (bodyData != null && !bodyData.isEmpty()) {
+                normalizeSsicData(bodyData);
+                requirement.setData(bodyData);
+            }
             requirement.setStatus("under review");
             requirement.setUpdatedAt(new java.util.Date());
             requirementRepository.save(requirement);
-            
-            Optional<User> userOpt = userRepository.findById(userDetails.getId());
-            userOpt.ifPresent(user -> syncWithOnboardingAndKyc(user, requirement.getData(), requirement));
-
-            String compName = resolveProposedCompanyName(requirement.getData());
-            String applicantName = (userDetails.getFirstName() + " " + userDetails.getLastName()).trim();
-            if (applicantName.isEmpty()) applicantName = userDetails.getEmail();
-
-            try {
-                // Admin notification
-                notificationService.sendNotification(
-                        "admin",
-                        "New Application: " + compName,
-                        applicantName + " submitted a new incorporation application for " + compName + ".",
-                        "application",
-                        requirement.getId(),
-                        "High",
-                        "applications.html"
-                );
-                // Staff notification
-                notificationService.sendNotification(
-                        "staff",
-                        "New Application: " + compName,
-                        applicantName + " submitted a new incorporation application for " + compName + ".",
-                        "application",
-                        requirement.getId(),
-                        "High",
-                        "applications.html"
-                );
-                // Client notification
-                notificationService.sendNotification(
-                        userDetails.getId(),
-                        "Application Submitted Successfully",
-                        "Your incorporation application for " + compName + " has been received and is currently under review.",
-                        "application",
-                        requirement.getId(),
-                        "Info",
-                        "/client/portal.html"
-                );
-            } catch (Exception e) {}
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("status", requirement.getStatus());
-            response.put("data", requirement.getData());
-            response.put("sectionStatuses", requirement.getSectionStatuses());
-            response.put("applicationId", requirement.getId());
-            return ResponseEntity.ok(response);
         } else {
-            return ResponseEntity.badRequest().body("No requirement found to submit");
+            requirement = new Requirement(userDetails.getId(), bodyData != null ? bodyData : new HashMap<>());
+            if (bodyData != null && !bodyData.isEmpty()) {
+                normalizeSsicData(bodyData);
+                requirement.setData(bodyData);
+            }
+            requirement.setStatus("under review");
+            requirement.setCreatedAt(new java.util.Date());
+            requirement.setUpdatedAt(new java.util.Date());
+            requirementRepository.save(requirement);
         }
+            
+        Optional<User> userOpt = userRepository.findById(userDetails.getId());
+        if (userOpt.isPresent()) {
+            syncWithOnboardingAndKyc(userOpt.get(), requirement.getData(), requirement);
+        }
+
+        String compName = resolveProposedCompanyName(requirement.getData());
+        String applicantName = (userDetails.getFirstName() + " " + userDetails.getLastName()).trim();
+        if (applicantName.isEmpty()) applicantName = userDetails.getEmail();
+
+        try {
+            // Admin notification
+            notificationService.sendNotification(
+                    "admin",
+                    "New Application: " + compName,
+                    applicantName + " submitted a new incorporation application for " + compName + ".",
+                    "application",
+                    requirement.getId(),
+                    "High",
+                    "applications.html"
+            );
+            // Staff notification
+            notificationService.sendNotification(
+                    "staff",
+                    "New Application: " + compName,
+                    applicantName + " submitted a new incorporation application for " + compName + ".",
+                    "application",
+                    requirement.getId(),
+                    "High",
+                    "applications.html"
+            );
+            // Client notification
+            notificationService.sendNotification(
+                    userDetails.getId(),
+                    "Application Submitted Successfully",
+                    "Your incorporation application for " + compName + " has been received and is currently under review.",
+                    "application",
+                    requirement.getId(),
+                    "Info",
+                    "/client/portal.html"
+            );
+        } catch (Exception e) {}
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("status", requirement.getStatus());
+        response.put("data", requirement.getData());
+        response.put("sectionStatuses", requirement.getSectionStatuses());
+        response.put("applicationId", requirement.getId());
+        return ResponseEntity.ok(response);
     }
 
     @PostMapping("/pay")
@@ -199,6 +248,7 @@ public class RequirementController {
         }
         UserDetailsImpl userDetails = (UserDetailsImpl) authentication.getPrincipal();
 
+        normalizeSsicData(data);
         Optional<Requirement> reqOpt = requirementRepository.findFirstByUserIdOrderByUpdatedAtDesc(userDetails.getId());
         Requirement requirement;
         if (reqOpt.isPresent()) {
@@ -271,21 +321,61 @@ public class RequirementController {
 
     @PostMapping("/public/submit")
     public ResponseEntity<?> publicSubmitRequirement(@RequestBody Map<String, Object> data) {
-        // 1. Extract contact details
-        @SuppressWarnings("unchecked")
-        Map<String, Object> contact = (Map<String, Object>) data.get("contact");
-        if (contact == null) {
-            return ResponseEntity.badRequest().body("Contact information is required");
+        // 1. Extract contact details with resilient fallbacks
+        String email = null;
+        String firstName = "";
+        String lastName = "";
+        String phone = "";
+
+        if (data != null && data.containsKey("contact") && data.get("contact") instanceof Map) {
+            Map<?, ?> contact = (Map<?, ?>) data.get("contact");
+            if (contact.get("email") != null) email = String.valueOf(contact.get("email")).trim();
+            if (contact.get("firstName") != null) firstName = String.valueOf(contact.get("firstName")).trim();
+            if (contact.get("lastName") != null) lastName = String.valueOf(contact.get("lastName")).trim();
+            if (contact.get("phone") != null) phone = String.valueOf(contact.get("phone")).trim();
         }
-        String email = (String) contact.get("email");
-        String firstName = (String) contact.get("firstName");
-        String lastName = (String) contact.get("lastName");
-        
-        if (email == null || email.trim().isEmpty()) {
-            return ResponseEntity.badRequest().body("Contact email is required");
+
+        if ((email == null || email.isEmpty()) && data != null && data.containsKey("email") && data.get("email") != null) {
+            email = String.valueOf(data.get("email")).trim();
         }
-        if (firstName == null) firstName = "";
-        if (lastName == null) lastName = "";
+
+        if ((email == null || email.isEmpty()) && data != null && data.containsKey("directors") && data.get("directors") instanceof List) {
+            List<?> dirs = (List<?>) data.get("directors");
+            if (!dirs.isEmpty() && dirs.get(0) instanceof Map) {
+                Map<?, ?> d0 = (Map<?, ?>) dirs.get(0);
+                if (d0.get("email") != null) email = String.valueOf(d0.get("email")).trim();
+                if (firstName.isEmpty() && d0.get("name") != null) firstName = String.valueOf(d0.get("name")).trim();
+            }
+        }
+
+        if ((email == null || email.isEmpty()) && data != null && data.containsKey("shareholders") && data.get("shareholders") instanceof List) {
+            List<?> shs = (List<?>) data.get("shareholders");
+            if (!shs.isEmpty() && shs.get(0) instanceof Map) {
+                Map<?, ?> s0 = (Map<?, ?>) shs.get(0);
+                if (s0.get("email") != null) email = String.valueOf(s0.get("email")).trim();
+                if (firstName.isEmpty() && s0.get("name") != null) firstName = String.valueOf(s0.get("name")).trim();
+            }
+        }
+
+        if (email == null || email.isEmpty()) {
+            email = "client." + System.currentTimeMillis() + "@globalisor.com";
+        }
+        if (firstName.isEmpty()) {
+            firstName = "Client";
+        }
+
+        // Guarantee contact map is populated on data
+        if (data != null) {
+            Map<String, Object> contactMap = new HashMap<>();
+            if (data.containsKey("contact") && data.get("contact") instanceof Map) {
+                contactMap.putAll((Map<String, Object>) data.get("contact"));
+            }
+            contactMap.put("email", email);
+            contactMap.put("firstName", firstName);
+            contactMap.put("lastName", lastName);
+            if (!phone.isEmpty()) contactMap.put("phone", phone);
+            data.put("contact", contactMap);
+        }
 
         // 2. Check if user already exists
         String encryptedEmail = encryptionUtils.encryptQueryable(email);
@@ -335,17 +425,29 @@ public class RequirementController {
             complianceRepository.save(compliance);
         }
 
+        normalizeSsicData(data);
         // 3. Save the Requirement record (pre-registration application)
         Optional<Requirement> reqOpt = requirementRepository.findFirstByUserIdOrderByUpdatedAtDesc(clientUser.getId());
         Requirement requirement;
         if (reqOpt.isPresent()) {
-            requirement = reqOpt.get();
-            requirement.setData(data);
-            requirement.setStatus("under review");
-            requirement.setUpdatedAt(new Date());
+            Requirement existing = reqOpt.get();
+            String existingStatus = existing.getStatus() != null ? existing.getStatus().toLowerCase() : "";
+            if (!existingStatus.contains("approved") && !existingStatus.contains("completed")) {
+                requirement = existing;
+                requirement.setData(data);
+                requirement.setStatus("under review");
+                requirement.setUpdatedAt(new Date());
+            } else {
+                requirement = new Requirement(clientUser.getId(), data);
+                requirement.setStatus("under review");
+                requirement.setCreatedAt(new Date());
+                requirement.setUpdatedAt(new Date());
+            }
         } else {
             requirement = new Requirement(clientUser.getId(), data);
             requirement.setStatus("under review");
+            requirement.setCreatedAt(new Date());
+            requirement.setUpdatedAt(new Date());
         }
         requirementRepository.save(requirement);
 
@@ -503,5 +605,44 @@ public class RequirementController {
             return String.valueOf(data.get("company_name")).trim();
         }
         return "Singapore Pte Ltd";
+    }
+
+    private void normalizeSsicData(Map<String, Object> data) {
+        if (data == null) return;
+        if (data.containsKey("activities") && data.get("activities") instanceof Map) {
+            Map<?, ?> acts = (Map<?, ?>) data.get("activities");
+            Object pri = acts.get("primary");
+            if (pri != null) {
+                if (!data.containsKey("primarySsic")) {
+                    data.put("primarySsic", pri);
+                }
+                if (!data.containsKey("primaryActivity")) {
+                    if (pri instanceof Map) {
+                        Map<?, ?> pm = (Map<?, ?>) pri;
+                        String code = pm.get("code") != null ? String.valueOf(pm.get("code")) : "";
+                        String name = pm.get("name") != null ? String.valueOf(pm.get("name")) : (pm.get("description") != null ? String.valueOf(pm.get("description")) : "");
+                        data.put("primaryActivity", (code.isEmpty() ? "" : code + " - ") + name);
+                    } else {
+                        data.put("primaryActivity", String.valueOf(pri));
+                    }
+                }
+            }
+            Object sec = acts.get("secondary");
+            if (sec != null) {
+                if (!data.containsKey("secondarySsic")) {
+                    data.put("secondarySsic", sec);
+                }
+                if (!data.containsKey("secondaryActivity")) {
+                    if (sec instanceof Map) {
+                        Map<?, ?> sm = (Map<?, ?>) sec;
+                        String code = sm.get("code") != null ? String.valueOf(sm.get("code")) : "";
+                        String name = sm.get("name") != null ? String.valueOf(sm.get("name")) : (sm.get("description") != null ? String.valueOf(sm.get("description")) : "");
+                        data.put("secondaryActivity", (code.isEmpty() ? "" : code + " - ") + name);
+                    } else {
+                        data.put("secondaryActivity", String.valueOf(sec));
+                    }
+                }
+            }
+        }
     }
 }

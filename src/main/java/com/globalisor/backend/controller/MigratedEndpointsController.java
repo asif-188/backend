@@ -1355,22 +1355,11 @@ public class MigratedEndpointsController {
     // --- APPLICATION ENDPOINTS ---
     @GetMapping("/applications")
     public ResponseEntity<List<Map<String, Object>>> getAllApplications() {
-        List<Requirement> requirements = requirementRepository.findActiveLightweight();
-        List<Onboarding> onboardings = onboardingRepository.findActiveLightweight();
+        List<Requirement> activeRequirements = requirementRepository.findAllLightweight();
+        List<Onboarding> activeOnboardings = onboardingRepository.findAllLightweight();
 
-        List<Requirement> activeRequirements = requirements.stream()
-                .filter(r -> {
-                    String s = r.getStatus() != null ? r.getStatus().toLowerCase() : "";
-                    return !s.contains("approved") && !s.contains("completed");
-                })
-                .collect(Collectors.toList());
-
-        List<Onboarding> activeOnboardings = onboardings.stream()
-                .filter(o -> {
-                    String s = o.getStatus() != null ? o.getStatus().toLowerCase() : "";
-                    return !s.contains("approved") && !s.contains("completed");
-                })
-                .collect(Collectors.toList());
+        if (activeRequirements == null) activeRequirements = Collections.emptyList();
+        if (activeOnboardings == null) activeOnboardings = Collections.emptyList();
 
         Set<String> allClientIds = new HashSet<>();
         for (Requirement r : activeRequirements) {
@@ -1384,46 +1373,46 @@ public class MigratedEndpointsController {
             }
         }
 
-        if (allClientIds.isEmpty()) {
-            return ResponseEntity.ok(Collections.emptyList());
-        }
-
         List<String> userIds = new ArrayList<>(allClientIds);
+        Map<String, User> userMap = new HashMap<>();
+        Map<String, Kyc> kycMap = new HashMap<>();
+        Map<String, Long> pendingDocCounts = new HashMap<>();
 
-        // Fetch User, KYC, and Document counts in parallel for optimal speed
-        CompletableFuture<Map<String, User>> usersFuture = CompletableFuture.supplyAsync(() -> {
-            try {
-                List<User> users = userRepository.findAllById(userIds);
-                return users.stream().collect(Collectors.toMap(User::getId, u -> u, (a, b) -> a));
-            } catch (Exception e) {
-                return new HashMap<>();
-            }
-        });
+        if (!userIds.isEmpty()) {
+            CompletableFuture<Map<String, User>> usersFuture = CompletableFuture.supplyAsync(() -> {
+                try {
+                    List<User> users = userRepository.findAllById(userIds);
+                    return users.stream().collect(Collectors.toMap(User::getId, u -> u, (a, b) -> a));
+                } catch (Exception e) {
+                    return new HashMap<>();
+                }
+            });
 
-        CompletableFuture<Map<String, Kyc>> kycFuture = CompletableFuture.supplyAsync(() -> {
-            try {
-                List<Kyc> kycRecords = kycRepository.findByClientIdIn(userIds);
-                return kycRecords.stream().collect(Collectors.toMap(Kyc::getClientId, k -> k, (a, b) -> a));
-            } catch (Exception e) {
-                return new HashMap<>();
-            }
-        });
+            CompletableFuture<Map<String, Kyc>> kycFuture = CompletableFuture.supplyAsync(() -> {
+                try {
+                    List<Kyc> kycRecords = kycRepository.findByClientIdIn(userIds);
+                    return kycRecords.stream().collect(Collectors.toMap(Kyc::getClientId, k -> k, (a, b) -> a));
+                } catch (Exception e) {
+                    return new HashMap<>();
+                }
+            });
 
-        CompletableFuture<Map<String, Long>> docCountsFuture = CompletableFuture.supplyAsync(() -> {
-            try {
-                List<ClientDocument> documents = clientDocumentRepository.findLightweightByClientIdIn(userIds);
-                return documents.stream()
-                        .filter(d -> "pending".equalsIgnoreCase(d.getStatus()) && d.getClientId() != null)
-                        .collect(Collectors.groupingBy(ClientDocument::getClientId, Collectors.counting()));
-            } catch (Exception e) {
-                return new HashMap<>();
-            }
-        });
+            CompletableFuture<Map<String, Long>> docCountsFuture = CompletableFuture.supplyAsync(() -> {
+                try {
+                    List<ClientDocument> documents = clientDocumentRepository.findLightweightByClientIdIn(userIds);
+                    return documents.stream()
+                            .filter(d -> "pending".equalsIgnoreCase(d.getStatus()) && d.getClientId() != null)
+                            .collect(Collectors.groupingBy(ClientDocument::getClientId, Collectors.counting()));
+                } catch (Exception e) {
+                    return new HashMap<>();
+                }
+            });
 
-        CompletableFuture.allOf(usersFuture, kycFuture, docCountsFuture).join();
-        Map<String, User> userMap = usersFuture.join();
-        Map<String, Kyc> kycMap = kycFuture.join();
-        Map<String, Long> pendingDocCounts = docCountsFuture.join();
+            CompletableFuture.allOf(usersFuture, kycFuture, docCountsFuture).join();
+            userMap = usersFuture.join();
+            kycMap = kycFuture.join();
+            pendingDocCounts = docCountsFuture.join();
+        }
 
         SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
         List<Map<String, Object>> apps = new ArrayList<>();
@@ -1437,7 +1426,7 @@ public class MigratedEndpointsController {
 
             map.put("id", req.getId() != null ? req.getId() : ("APP-" + System.currentTimeMillis()));
             map.put("rawId", req.getId());
-            map.put("data", sanitizeSummaryData(req.getData()));
+            map.put("data", req.getData() != null ? new HashMap<>(req.getData()) : new HashMap<>());
 
             User user = uId != null ? userMap.get(uId) : null;
             map.put("business", extractCompanyName(req.getData(), user));
@@ -1476,6 +1465,7 @@ public class MigratedEndpointsController {
             // Date
             Date appDate = req.getUpdatedAt() != null ? req.getUpdatedAt() : (req.getCreatedAt() != null ? req.getCreatedAt() : new Date());
             map.put("date", sdf.format(appDate));
+            map.put("timestamp", appDate.getTime());
 
             apps.add(map);
         }
@@ -1524,9 +1514,20 @@ public class MigratedEndpointsController {
 
             Date obDate = ob.getCreatedAt() != null ? new Date(ob.getCreatedAt()) : (ob.getUpdatedAt() != null ? new Date(ob.getUpdatedAt()) : new Date());
             map.put("date", sdf.format(obDate));
+            map.put("timestamp", obDate.getTime());
 
             apps.add(map);
         }
+
+        // Sort newest submitted applications first
+        apps.sort((a, b) -> {
+            long tA = a.get("timestamp") instanceof Long ? (Long) a.get("timestamp") : 0L;
+            long tB = b.get("timestamp") instanceof Long ? (Long) b.get("timestamp") : 0L;
+            if (tB != tA) return Long.compare(tB, tA);
+            String idA = String.valueOf(a.getOrDefault("rawId", a.getOrDefault("id", "")));
+            String idB = String.valueOf(b.getOrDefault("rawId", b.getOrDefault("id", "")));
+            return idB.compareTo(idA);
+        });
 
         return ResponseEntity.ok(apps);
     }
@@ -1541,6 +1542,30 @@ public class MigratedEndpointsController {
         if (data.containsKey("priority")) summary.put("priority", data.get("priority"));
         if (data.containsKey("deadline")) summary.put("deadline", data.get("deadline"));
         if (data.containsKey("companyName")) summary.put("companyName", data.get("companyName"));
+        if (data.containsKey("activities")) summary.put("activities", data.get("activities"));
+        if (data.containsKey("activities.primary")) summary.put("activities.primary", data.get("activities.primary"));
+        if (data.containsKey("activities.secondary")) summary.put("activities.secondary", data.get("activities.secondary"));
+        if (data.containsKey("primarySsic")) summary.put("primarySsic", data.get("primarySsic"));
+        if (data.containsKey("secondarySsic")) summary.put("secondarySsic", data.get("secondarySsic"));
+        if (data.containsKey("primaryActivity")) summary.put("primaryActivity", data.get("primaryActivity"));
+        if (data.containsKey("secondaryActivity")) summary.put("secondaryActivity", data.get("secondaryActivity"));
+        if (data.containsKey("customPrimaryActivity")) summary.put("customPrimaryActivity", data.get("customPrimaryActivity"));
+        if (data.containsKey("customSecondaryActivity")) summary.put("customSecondaryActivity", data.get("customSecondaryActivity"));
+        if (data.containsKey("capital")) summary.put("capital", data.get("capital"));
+        if (data.containsKey("shareCapital")) summary.put("shareCapital", data.get("shareCapital"));
+        if (data.containsKey("totalShares")) summary.put("totalShares", data.get("totalShares"));
+        if (data.containsKey("fye")) summary.put("fye", data.get("fye"));
+        if (data.containsKey("financialYearEnd")) summary.put("financialYearEnd", data.get("financialYearEnd"));
+        if (data.containsKey("directors")) summary.put("directors", data.get("directors"));
+        if (data.containsKey("officers")) summary.put("officers", data.get("officers"));
+        if (data.containsKey("shareholders")) summary.put("shareholders", data.get("shareholders"));
+        if (data.containsKey("ubos")) summary.put("ubos", data.get("ubos"));
+        if (data.containsKey("controllers")) summary.put("controllers", data.get("controllers"));
+        if (data.containsKey("office")) summary.put("office", data.get("office"));
+        if (data.containsKey("secretary")) summary.put("secretary", data.get("secretary"));
+        if (data.containsKey("rons")) summary.put("rons", data.get("rons"));
+        if (data.containsKey("addOns")) summary.put("addOns", data.get("addOns"));
+        if (data.containsKey("selectedServices")) summary.put("selectedServices", data.get("selectedServices"));
         if (data.containsKey("contact")) {
             Object cObj = data.get("contact");
             if (cObj instanceof Map) {
@@ -1556,8 +1581,10 @@ public class MigratedEndpointsController {
                 Object namesObj = data.get("names");
                 if (namesObj instanceof List) {
                     List<?> names = (List<?>) namesObj;
-                    if (!names.isEmpty() && names.get(0) != null && !String.valueOf(names.get(0)).trim().isEmpty()) {
-                        return String.valueOf(names.get(0)).trim();
+                    for (Object n : names) {
+                        if (n != null && !String.valueOf(n).trim().isEmpty()) {
+                            return String.valueOf(n).trim();
+                        }
                     }
                 } else if (namesObj instanceof String && !((String) namesObj).trim().isEmpty()) {
                     return ((String) namesObj).trim();
