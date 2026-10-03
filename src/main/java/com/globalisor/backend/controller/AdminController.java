@@ -625,6 +625,45 @@ public class AdminController {
         return Optional.empty();
     }
 
+    private void normalizeSsicData(Map<String, Object> data) {
+        if (data == null) return;
+        if (data.containsKey("activities") && data.get("activities") instanceof Map) {
+            Map<?, ?> acts = (Map<?, ?>) data.get("activities");
+            Object pri = acts.get("primary");
+            if (pri != null) {
+                if (!data.containsKey("primarySsic")) {
+                    data.put("primarySsic", pri);
+                }
+                if (!data.containsKey("primaryActivity")) {
+                    if (pri instanceof Map) {
+                        Map<?, ?> pm = (Map<?, ?>) pri;
+                        String code = pm.get("code") != null ? String.valueOf(pm.get("code")) : "";
+                        String name = pm.get("name") != null ? String.valueOf(pm.get("name")) : (pm.get("description") != null ? String.valueOf(pm.get("description")) : "");
+                        data.put("primaryActivity", (code.isEmpty() ? "" : code + " - ") + name);
+                    } else {
+                        data.put("primaryActivity", String.valueOf(pri));
+                    }
+                }
+            }
+            Object sec = acts.get("secondary");
+            if (sec != null) {
+                if (!data.containsKey("secondarySsic")) {
+                    data.put("secondarySsic", sec);
+                }
+                if (!data.containsKey("secondaryActivity")) {
+                    if (sec instanceof Map) {
+                        Map<?, ?> sm = (Map<?, ?>) sec;
+                        String code = sm.get("code") != null ? String.valueOf(sm.get("code")) : "";
+                        String name = sm.get("name") != null ? String.valueOf(sm.get("name")) : (sm.get("description") != null ? String.valueOf(sm.get("description")) : "");
+                        data.put("secondaryActivity", (code.isEmpty() ? "" : code + " - ") + name);
+                    } else {
+                        data.put("secondaryActivity", String.valueOf(sec));
+                    }
+                }
+            }
+        }
+    }
+
     @GetMapping("/admin/applications/{id}")
     public ResponseEntity<?> getApplicationDetails(@PathVariable String id) {
         Optional<Requirement> reqOpt = findRequirementFlexible(id);
@@ -641,7 +680,9 @@ public class AdminController {
             res.put("reviewedAt", req.getReviewedAt());
             res.put("createdAt", req.getCreatedAt());
             res.put("updatedAt", req.getUpdatedAt());
-            res.put("data", req.getData());
+            Map<String, Object> reqData = req.getData() != null ? new HashMap<>(req.getData()) : new HashMap<>();
+            normalizeSsicData(reqData);
+            res.put("data", reqData);
             res.put("sectionStatuses", req.getSectionStatuses());
             
             if (req.getUserId() != null) {
@@ -653,6 +694,15 @@ public class AdminController {
                     res.put("clientStatus", u.getStatus());
                     res.put("clientCompanyName", u.getCompanyName());
                 });
+            }
+            if (!res.containsKey("clientEmail") || res.get("clientEmail") == null || String.valueOf(res.get("clientEmail")).trim().isEmpty()) {
+                if (reqData.containsKey("contact") && reqData.get("contact") instanceof Map) {
+                    Map<?, ?> c = (Map<?, ?>) reqData.get("contact");
+                    if (c.get("email") != null) res.put("clientEmail", c.get("email"));
+                    if (c.get("firstName") != null) res.put("clientFirstName", c.get("firstName"));
+                    if (c.get("lastName") != null) res.put("clientLastName", c.get("lastName"));
+                    if (c.get("phone") != null) res.put("clientPhone", c.get("phone"));
+                }
             }
             return ResponseEntity.ok(res);
         }
@@ -758,14 +808,24 @@ public class AdminController {
 
         // Activate Onboarding and unlock Client Portal
         try {
+            final String fClientFullName = clientFullName;
+            final String fClientEmail = clientEmail;
             Optional<Onboarding> obOpt = onboardingRepository.findFirstByClientIdOrderByCreatedAtDesc(req.getUserId());
-            if (obOpt.isPresent()) {
-                Onboarding ob = obOpt.get();
-                ob.setStatus("approved");
-                ob.setPortalActivated(true);
-                ob.getAuditLogs().add("Application verified and approved by admin. Client portal access activated at " + new Date());
-                onboardingRepository.save(ob);
-            }
+            Onboarding ob = obOpt.orElseGet(() -> {
+                Onboarding newOb = new Onboarding();
+                newOb.setClientId(req.getUserId());
+                newOb.setDisplayClientId("CL-" + (System.currentTimeMillis() % 100000));
+                newOb.setClientName(fClientFullName);
+                newOb.setClientEmail(fClientEmail);
+                newOb.setCreatedAt(System.currentTimeMillis());
+                return newOb;
+            });
+            ob.setStatus("approved");
+            ob.setPortalActivated(true);
+            ob.setProgressPercent(100);
+            ob.setUpdatedAt(System.currentTimeMillis());
+            ob.getAuditLogs().add("Application verified and approved by admin. Client portal access activated at " + new Date());
+            onboardingRepository.save(ob);
         } catch (Exception obEx) {
             System.err.println("Could not activate onboarding on approval: " + obEx.getMessage());
         }
