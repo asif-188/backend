@@ -15,9 +15,9 @@ public interface RequirementRepository extends MongoRepository<Requirement, Stri
     Optional<Requirement> findByUserId(String userId);
     List<Requirement> findByUserIdIn(List<String> userIds);
     List<Requirement> findAllByOrderByUpdatedAtDesc();
-    @org.springframework.data.mongodb.repository.Query(value = "{}", fields = "{ 'id': 1, 'userId': 1, 'status': 1, 'staff': 1, 'assignedStaffId': 1, 'assignedStaffName': 1, 'createdAt': 1, 'updatedAt': 1, 'data': 1 }")
+    @org.springframework.data.mongodb.repository.Query(value = "{}", fields = "{ 'id': 1, 'userId': 1, 'status': 1, 'staff': 1, 'assignedStaffId': 1, 'assignedStaffName': 1, 'createdAt': 1, 'updatedAt': 1, 'data.names': 1, 'data.nameChecks': 1, 'data.companySuffix': 1, 'data.companyName': 1, 'data.priority': 1, 'data.deadline': 1, 'data.journeyType': 1, 'data.primaryActivity': 1, 'data.secondaryActivity': 1, 'data.primarySsic': 1, 'data.secondarySsic': 1 }")
     List<Requirement> findAllLightweight();
-    @org.springframework.data.mongodb.repository.Query(value = "{ 'status': { $nin: ['approved', 'Approved', 'APPROVED', 'completed', 'Completed', 'COMPLETED'] } }", fields = "{ 'id': 1, 'userId': 1, 'status': 1, 'staff': 1, 'assignedStaffId': 1, 'assignedStaffName': 1, 'createdAt': 1, 'updatedAt': 1, 'data': 1 }")
+    @org.springframework.data.mongodb.repository.Query(value = "{ 'status': { $nin: ['approved', 'Approved', 'APPROVED', 'completed', 'Completed', 'COMPLETED'] } }", fields = "{ 'id': 1, 'userId': 1, 'status': 1, 'staff': 1, 'assignedStaffId': 1, 'assignedStaffName': 1, 'createdAt': 1, 'updatedAt': 1, 'data.names': 1, 'data.nameChecks': 1, 'data.companySuffix': 1, 'data.companyName': 1, 'data.priority': 1, 'data.deadline': 1, 'data.journeyType': 1, 'data.primaryActivity': 1, 'data.secondaryActivity': 1, 'data.primarySsic': 1, 'data.secondarySsic': 1 }")
     List<Requirement> findActiveLightweight();
     long countByStatusIgnoreCase(String status);
     long countByStatusIn(List<String> statuses);

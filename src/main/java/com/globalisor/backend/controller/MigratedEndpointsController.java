@@ -1426,7 +1426,7 @@ public class MigratedEndpointsController {
 
             map.put("id", req.getId() != null ? req.getId() : ("APP-" + System.currentTimeMillis()));
             map.put("rawId", req.getId());
-            map.put("data", req.getData() != null ? new HashMap<>(req.getData()) : new HashMap<>());
+            map.put("data", sanitizeSummaryData(req.getData()));
 
             User user = uId != null ? userMap.get(uId) : null;
             map.put("business", extractCompanyName(req.getData(), user));
@@ -1543,8 +1543,6 @@ public class MigratedEndpointsController {
         if (data.containsKey("deadline")) summary.put("deadline", data.get("deadline"));
         if (data.containsKey("companyName")) summary.put("companyName", data.get("companyName"));
         if (data.containsKey("activities")) summary.put("activities", data.get("activities"));
-        if (data.containsKey("activities.primary")) summary.put("activities.primary", data.get("activities.primary"));
-        if (data.containsKey("activities.secondary")) summary.put("activities.secondary", data.get("activities.secondary"));
         if (data.containsKey("primarySsic")) summary.put("primarySsic", data.get("primarySsic"));
         if (data.containsKey("secondarySsic")) summary.put("secondarySsic", data.get("secondarySsic"));
         if (data.containsKey("primaryActivity")) summary.put("primaryActivity", data.get("primaryActivity"));
@@ -1556,16 +1554,8 @@ public class MigratedEndpointsController {
         if (data.containsKey("totalShares")) summary.put("totalShares", data.get("totalShares"));
         if (data.containsKey("fye")) summary.put("fye", data.get("fye"));
         if (data.containsKey("financialYearEnd")) summary.put("financialYearEnd", data.get("financialYearEnd"));
-        if (data.containsKey("directors")) summary.put("directors", data.get("directors"));
-        if (data.containsKey("officers")) summary.put("officers", data.get("officers"));
-        if (data.containsKey("shareholders")) summary.put("shareholders", data.get("shareholders"));
-        if (data.containsKey("ubos")) summary.put("ubos", data.get("ubos"));
-        if (data.containsKey("controllers")) summary.put("controllers", data.get("controllers"));
         if (data.containsKey("office")) summary.put("office", data.get("office"));
         if (data.containsKey("secretary")) summary.put("secretary", data.get("secretary"));
-        if (data.containsKey("rons")) summary.put("rons", data.get("rons"));
-        if (data.containsKey("addOns")) summary.put("addOns", data.get("addOns"));
-        if (data.containsKey("selectedServices")) summary.put("selectedServices", data.get("selectedServices"));
         if (data.containsKey("contact")) {
             Object cObj = data.get("contact");
             if (cObj instanceof Map) {
