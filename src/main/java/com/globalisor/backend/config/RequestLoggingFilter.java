@@ -35,8 +35,8 @@ public class RequestLoggingFilter extends OncePerRequestFilter {
 
         String method = request.getMethod();
 
-        // Skip logging for OPTIONS and HEAD calls (CORS preflights)
-        if ("OPTIONS".equalsIgnoreCase(method) || "HEAD".equalsIgnoreCase(method)) {
+        // Skip logging for GET, OPTIONS, and HEAD calls
+        if ("GET".equalsIgnoreCase(method) || "OPTIONS".equalsIgnoreCase(method) || "HEAD".equalsIgnoreCase(method)) {
             filterChain.doFilter(request, response);
             return;
         }

@@ -970,7 +970,22 @@ public class MigratedEndpointsController {
         }
         // Sort by timestamp descending
         list.sort((a, b) -> Long.compare(b.getTimestamp() != null ? b.getTimestamp() : 0L, a.getTimestamp() != null ? a.getTimestamp() : 0L));
-        return ResponseEntity.ok(list);
+
+        // Deduplicate notifications with identical title, message, and relatedId within a 60-second window
+        List<Notification> deduplicated = new ArrayList<>();
+        Set<String> seenKeys = new HashSet<>();
+        for (Notification n : list) {
+            long timeWindow = (n.getTimestamp() != null ? n.getTimestamp() : 0L) / 60000L;
+            String key = (n.getTitle() != null ? n.getTitle() : "") + "|" +
+                         (n.getMessage() != null ? n.getMessage() : "") + "|" +
+                         (n.getRelatedId() != null ? n.getRelatedId() : "") + "|" +
+                         timeWindow;
+            if (seenKeys.add(key)) {
+                deduplicated.add(n);
+            }
+        }
+
+        return ResponseEntity.ok(deduplicated);
     }
 
     @PostMapping("/notifications/read")

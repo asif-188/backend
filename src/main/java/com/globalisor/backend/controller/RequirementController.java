@@ -124,18 +124,7 @@ public class RequirementController {
         }
         requirementRepository.save(requirement);
         
-        if (isNew) {
-            try {
-                notificationService.sendNotification(
-                        "admin",
-                        "New Application Created",
-                        userDetails.getFirstName() + " " + userDetails.getLastName() + " created a new application.",
-                        "application",
-                        requirement.getId(),
-                        "Info"
-                );
-            } catch (Exception e) {}
-        }
+
         
         Map<String, Object> response = new HashMap<>();
         response.put("status", requirement.getStatus());
@@ -200,19 +189,9 @@ public class RequirementController {
         if (applicantName.isEmpty()) applicantName = userDetails.getEmail();
 
         try {
-            // Admin notification
+            // Staff & Admin notification
             notificationService.sendNotification(
-                    "admin",
-                    "New Application: " + compName,
-                    applicantName + " submitted a new incorporation application for " + compName + ".",
-                    "application",
-                    requirement.getId(),
-                    "High",
-                    "applications.html"
-            );
-            // Staff notification
-            notificationService.sendNotification(
-                    "staff",
+                    "staff-admin",
                     "New Application: " + compName,
                     applicantName + " submitted a new incorporation application for " + compName + ".",
                     "application",
@@ -460,19 +439,9 @@ public class RequirementController {
         if (applicantName.isEmpty()) applicantName = email;
 
         try {
-            // Admin notification
+            // Staff & Admin notification
             notificationService.sendNotification(
-                    "admin",
-                    "New Application: " + compName,
-                    applicantName + " submitted a new incorporation application for " + compName + " (" + email + ").",
-                    "application",
-                    requirement.getId(),
-                    "High",
-                    "applications.html"
-            );
-            // Staff notification
-            notificationService.sendNotification(
-                    "staff",
+                    "staff-admin",
                     "New Application: " + compName,
                     applicantName + " submitted a new incorporation application for " + compName + " (" + email + ").",
                     "application",
