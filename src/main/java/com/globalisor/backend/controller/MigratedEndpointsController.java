@@ -1353,8 +1353,56 @@ public class MigratedEndpointsController {
     }
 
     // --- APPLICATION ENDPOINTS ---
+    @GetMapping("/applications/counts")
+    public ResponseEntity<Map<String, Long>> getApplicationCounts() {
+        List<Requirement> activeRequirements = requirementRepository.findAllLightweight();
+        List<Onboarding> activeOnboardings = onboardingRepository.findAllLightweight();
+
+        if (activeRequirements == null) activeRequirements = Collections.emptyList();
+        if (activeOnboardings == null) activeOnboardings = Collections.emptyList();
+
+        long pending = 0;
+        long rejected = 0;
+        long all = 0;
+        Set<String> processedClientIds = new HashSet<>();
+
+        for (Requirement r : activeRequirements) {
+            String st = r.getStatus() != null ? r.getStatus().trim().toLowerCase() : "pending";
+            if (st.contains("approved") || st.contains("completed")) continue;
+            if (r.getUserId() != null) processedClientIds.add(r.getUserId());
+            all++;
+            if (st.contains("rejected") || st.contains("revision")) {
+                rejected++;
+            } else {
+                pending++;
+            }
+        }
+
+        for (Onboarding o : activeOnboardings) {
+            String uId = o.getClientId();
+            if (uId != null && processedClientIds.contains(uId)) continue;
+            String st = o.getStatus() != null ? o.getStatus().trim().toLowerCase() : "in_progress";
+            if (st.contains("approved") || st.contains("completed")) continue;
+            all++;
+            if (st.contains("rejected") || st.contains("revision")) {
+                rejected++;
+            } else {
+                pending++;
+            }
+        }
+
+        Map<String, Long> res = new HashMap<>();
+        res.put("pending", pending);
+        res.put("rejected", rejected);
+        res.put("all", all);
+        return ResponseEntity.ok(res);
+    }
+
     @GetMapping("/applications")
-    public ResponseEntity<List<Map<String, Object>>> getAllApplications() {
+    public ResponseEntity<List<Map<String, Object>>> getAllApplications(
+            @RequestParam(value = "tab", required = false) String tab,
+            @RequestParam(value = "status", required = false) String statusFilter,
+            @RequestParam(value = "all", defaultValue = "false") boolean includeAll) {
         List<Requirement> activeRequirements = requirementRepository.findAllLightweight();
         List<Onboarding> activeOnboardings = onboardingRepository.findAllLightweight();
 
@@ -1528,6 +1576,39 @@ public class MigratedEndpointsController {
             String idB = String.valueOf(b.getOrDefault("rawId", b.getOrDefault("id", "")));
             return idB.compareTo(idA);
         });
+
+        // 1. Exclude approved/completed from active review queue unless includeAll=true
+        if (!includeAll) {
+            apps = apps.stream().filter(a -> {
+                String st = String.valueOf(a.getOrDefault("status", "")).toLowerCase();
+                return !st.contains("approved") && !st.contains("completed");
+            }).collect(Collectors.toList());
+        }
+
+        // 2. Tab Filter from backend
+        if (tab != null && !tab.trim().isEmpty() && !"all".equalsIgnoreCase(tab)) {
+            String t = tab.trim().toLowerCase();
+            if ("pending".equalsIgnoreCase(t)) {
+                apps = apps.stream().filter(a -> {
+                    String st = String.valueOf(a.getOrDefault("status", "pending")).toLowerCase();
+                    return !st.contains("rejected") && !st.contains("revision");
+                }).collect(Collectors.toList());
+            } else if ("rejected".equalsIgnoreCase(t)) {
+                apps = apps.stream().filter(a -> {
+                    String st = String.valueOf(a.getOrDefault("status", "")).toLowerCase();
+                    return st.contains("rejected") || st.contains("revision");
+                }).collect(Collectors.toList());
+            }
+        }
+
+        // 3. Status Filter from backend
+        if (statusFilter != null && !statusFilter.trim().isEmpty() && !"all".equalsIgnoreCase(statusFilter)) {
+            String sf = statusFilter.trim().toLowerCase();
+            apps = apps.stream().filter(a -> {
+                String st = String.valueOf(a.getOrDefault("status", "")).toLowerCase();
+                return st.contains(sf);
+            }).collect(Collectors.toList());
+        }
 
         return ResponseEntity.ok(apps);
     }

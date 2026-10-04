@@ -175,7 +175,7 @@ public class RequirementController {
                 normalizeSsicData(bodyData);
                 requirement.setData(bodyData);
             }
-            requirement.setStatus("under review");
+            requirement.setStatus("pending");
             requirement.setUpdatedAt(new java.util.Date());
             requirementRepository.save(requirement);
         } else {
@@ -184,7 +184,7 @@ public class RequirementController {
                 normalizeSsicData(bodyData);
                 requirement.setData(bodyData);
             }
-            requirement.setStatus("under review");
+            requirement.setStatus("pending");
             requirement.setCreatedAt(new java.util.Date());
             requirement.setUpdatedAt(new java.util.Date());
             requirementRepository.save(requirement);
@@ -394,7 +394,7 @@ public class RequirementController {
             
             clientUser = new User(firstName, lastName, email, encodedPassword);
             clientUser.setRole("CLIENT");
-            clientUser.setStatus("PENDING_APPROVAL");
+            clientUser.setStatus("ACTIVE");
             clientUser.setPlainPassword(rawPassword);
             userRepository.save(clientUser);
             
