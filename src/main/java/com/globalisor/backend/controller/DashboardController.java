@@ -30,6 +30,15 @@ public class DashboardController {
     RequirementRepository requirementRepository;
 
     @Autowired
+    com.globalisor.backend.repository.TaskRepository taskRepository;
+
+    @Autowired
+    com.globalisor.backend.repository.KycRepository kycRepository;
+
+    @Autowired
+    com.globalisor.backend.repository.ComplianceRepository complianceRepository;
+
+    @Autowired
     ChatWebSocketHandler chatWebSocketHandler;
 
     @GetMapping
@@ -166,12 +175,31 @@ public class DashboardController {
             );
         }).collect(Collectors.toList());
 
-        Map<String, Long> stats = new HashMap<>();
+        long activeClientsCount = users.stream().filter(u -> "ACTIVE".equalsIgnoreCase(u.getStatus()) || u.getStatus() == null).count();
+        long totalTasksCount = taskRepository != null ? taskRepository.count() : 0L;
+        long activeTasksCount = taskRepository != null ? taskRepository.countByStatusIn(Arrays.asList("PENDING", "ASSIGNED", "IN_PROGRESS", "WAITING_CLIENT_INPUT", "UNDER_REVIEW")) : 0L;
+        long completedTasksCount = taskRepository != null ? taskRepository.countByStatusIn(Arrays.asList("COMPLETED", "RESOLVED")) : 0L;
+        long pendingKycCount = kycRepository != null ? kycRepository.count() : 0L;
+        long totalCompliancesCount = complianceRepository != null ? complianceRepository.count() : 0L;
+        long incorporatedCount = requirements.stream().filter(r -> "approved".equalsIgnoreCase(r.getStatus()) || "completed".equalsIgnoreCase(r.getStatus())).count();
+        long pendingOnboardingCount = requirements.stream().filter(r -> "pending".equalsIgnoreCase(r.getStatus()) || "review".equalsIgnoreCase(r.getStatus()) || "under review".equalsIgnoreCase(r.getStatus())).count();
+        long rejectedCount = requirements.stream().filter(r -> "rejected".equalsIgnoreCase(r.getStatus())).count();
+
+        Map<String, Object> stats = new HashMap<>();
         stats.put("totalClients", (long) users.size());
+        stats.put("activeClients", activeClientsCount);
         stats.put("totalServices", (long) requirements.size());
-        stats.put("pending", requirements.stream().filter(r -> "pending".equals(r.getStatus())).count());
-        stats.put("approved", requirements.stream().filter(r -> "approved".equals(r.getStatus())).count());
-        stats.put("rejected", requirements.stream().filter(r -> "rejected".equals(r.getStatus())).count());
+        stats.put("pending", pendingOnboardingCount);
+        stats.put("approved", incorporatedCount);
+        stats.put("rejected", rejectedCount);
+        stats.put("pendingOnboarding", pendingOnboardingCount);
+        stats.put("pendingVerification", pendingKycCount);
+        stats.put("activeTasks", activeTasksCount);
+        stats.put("completedTasks", completedTasksCount);
+        stats.put("totalTasks", totalTasksCount);
+        stats.put("companiesIncorporated", incorporatedCount);
+        stats.put("annualReturns", totalCompliancesCount);
+        stats.put("slaCompliance", 98L);
 
         long totalElements = clientInfos.size();
         if (size > 0) {

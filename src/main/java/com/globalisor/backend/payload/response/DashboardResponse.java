@@ -12,13 +12,13 @@ import java.util.Map;
 @AllArgsConstructor
 public class DashboardResponse {
     private List<ClientInfo> clients;
-    private Map<String, Long> stats;
+    private Map<String, Object> stats;
     private int page;
     private int size;
     private long totalElements;
     private int totalPages;
 
-    public DashboardResponse(List<ClientInfo> clients, Map<String, Long> stats) {
+    public DashboardResponse(List<ClientInfo> clients, Map<String, Object> stats) {
         this.clients = clients;
         this.stats = stats;
         this.page = 1;
