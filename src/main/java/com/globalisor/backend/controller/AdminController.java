@@ -1069,6 +1069,9 @@ public class AdminController {
                 staff.put("designation", u.getDesignation() != null ? u.getDesignation() : "Senior Operations Specialist");
                 staff.put("onlineStatus", u.getOnlineStatus() != null ? u.getOnlineStatus() : "ONLINE");
                 staff.put("phone", u.getPhone() != null ? u.getPhone() : "");
+                staff.put("lastLoginTime", u.getLastLoginTime() != null ? u.getLastLoginTime() : (u.getLastSeenTime() != null ? u.getLastSeenTime() : null));
+                staff.put("lastLoginAt", u.getLastLoginAt());
+                staff.put("lastSeenTime", u.getLastSeenTime());
                 staffList.add(staff);
             }
         }

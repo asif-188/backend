@@ -122,6 +122,13 @@ public class AuthController {
         SecurityContextHolder.getContext().setAuthentication(authentication);
         String jwt = jwtUtils.generateJwtToken(authentication);
 
+        try {
+            user.setLastLoginTime(System.currentTimeMillis());
+            user.setLastSeenTime(System.currentTimeMillis());
+            user.setOnlineStatus("ONLINE");
+            userRepository.save(user);
+        } catch (Exception ignored) {}
+
         String role = user.getRole() != null ? user.getRole().toUpperCase() : "CLIENT";
         if (role.startsWith("ROLE_")) role = role.substring(5);
 

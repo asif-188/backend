@@ -23,6 +23,8 @@ public class User {
     private String status = "ACTIVE";
     private String plainPassword;
     private Long lastSeenTime;
+    private Long lastLoginTime;
+    private String lastLoginAt;
     @Indexed
     private String companyName;
     private String phone;
