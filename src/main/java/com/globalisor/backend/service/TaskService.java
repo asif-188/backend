@@ -421,6 +421,121 @@ public class TaskService {
         return saved;
     }
 
+    public Task handoverTask(String taskId, Task.UserRef newAssignee, String newStatus, String completedWork, String nextSteps, String performedByName, String performedByRole) {
+        Task task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new RuntimeException("Task not found with id: " + taskId));
+
+        long now = System.currentTimeMillis();
+        Task.UserRef previousAssignee = task.getAssignedTo();
+        String previousStatus = task.getStatus();
+
+        // 1. Update Assignee
+        task.setAssignedTo(newAssignee);
+
+        // 2. Update Status if specified
+        if (newStatus != null && !newStatus.trim().isEmpty()) {
+            task.setStatus(newStatus.trim());
+            if ("COMPLETED".equalsIgnoreCase(newStatus) || "RESOLVED".equalsIgnoreCase(newStatus)) {
+                task.setResolvedAt(now);
+            }
+        } else if ("PENDING".equalsIgnoreCase(task.getStatus())) {
+            task.setStatus("IN_PROGRESS");
+        }
+
+        task.setUpdatedAt(now);
+
+        String fromName = previousAssignee != null && previousAssignee.getName() != null ? previousAssignee.getName() : "Unassigned";
+        String toName = newAssignee != null && newAssignee.getName() != null ? newAssignee.getName() : "Unassigned";
+
+        StringBuilder logDetails = new StringBuilder();
+        logDetails.append("Handover from ").append(fromName).append(" to ").append(toName).append(".");
+        if (completedWork != null && !completedWork.trim().isEmpty()) {
+            logDetails.append(" Completed: ").append(completedWork.trim()).append(".");
+        }
+        if (nextSteps != null && !nextSteps.trim().isEmpty()) {
+            logDetails.append(" Next: ").append(nextSteps.trim()).append(".");
+        }
+
+        if (task.getActivityLog() == null) {
+            task.setActivityLog(new ArrayList<>());
+        }
+
+        // 3. Add to ActivityLog
+        task.getActivityLog().add(Task.ActivityLog.builder()
+                .id("act-" + UUID.randomUUID())
+                .action("HANDOVER")
+                .details(logDetails.toString())
+                .performedBy(performedByName != null && !performedByName.trim().isEmpty() ? performedByName : fromName)
+                .performedByRole(performedByRole != null && !performedByRole.trim().isEmpty() ? performedByRole : "STAFF")
+                .timestamp(now)
+                .fromAssignee(previousAssignee)
+                .toAssignee(newAssignee)
+                .completedWork(completedWork)
+                .nextSteps(nextSteps)
+                .previousStatus(previousStatus)
+                .newStatus(task.getStatus())
+                .build());
+
+        // 4. Add internal comment trail for seamless team continuity
+        if (task.getComments() == null) {
+            task.setComments(new ArrayList<>());
+        }
+        StringBuilder commentText = new StringBuilder();
+        commentText.append("🔄 **Task Handover Notice**\n");
+        commentText.append("Handed over from **").append(fromName).append("** to **").append(toName).append("**.\n");
+        if (completedWork != null && !completedWork.trim().isEmpty()) {
+            commentText.append("\n**✓ Work Completed So Far:**\n").append(completedWork.trim()).append("\n");
+        }
+        if (nextSteps != null && !nextSteps.trim().isEmpty()) {
+            commentText.append("\n**→ Next Steps / Pending Action:**\n").append(nextSteps.trim());
+        }
+
+        String authorName = (performedByName != null && !performedByName.trim().isEmpty()) ? performedByName : fromName;
+        String authorRole = (performedByRole != null && !performedByRole.trim().isEmpty()) ? performedByRole : "STAFF";
+
+        task.getComments().add(Task.Comment.builder()
+                .id("cmt-" + UUID.randomUUID())
+                .authorId(previousAssignee != null ? previousAssignee.getId() : "usr-staff")
+                .authorName(authorName)
+                .authorRole(authorRole)
+                .authorAvatar(authorName.length() >= 2 ? authorName.substring(0, 2).toUpperCase() : "ST")
+                .text(commentText.toString())
+                .isInternal(true)
+                .timestamp(now)
+                .build());
+
+        Task saved = taskRepository.save(task);
+
+        // 5. Notify the newly assigned colleague
+        if (newAssignee != null && newAssignee.getId() != null) {
+            try {
+                notificationService.sendNotification(
+                        newAssignee.getId(),
+                        "Task Handover: " + task.getTicketNumber(),
+                        fromName + " handed over task '" + task.getTitle() + "' to you. Next action required.",
+                        "TASK_ASSIGNED",
+                        task.getId(),
+                        "Warning"
+                );
+            } catch (Exception ignored) {}
+        }
+
+        // 6. Notify admin
+        try {
+            notificationService.sendNotification(
+                    "admin",
+                    "Task Handover: " + task.getTicketNumber(),
+                    task.getTitle() + " handed over from " + fromName + " to " + toName,
+                    "TASK_HANDOVER",
+                    task.getId(),
+                    "Info",
+                    "tasks.html?id=" + task.getId()
+            );
+        } catch (Exception ignored) {}
+
+        return saved;
+    }
+
     public Task updateStatus(String taskId, String newStatus, String resolutionNotes, String performedByName, String performedByRole) {
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new RuntimeException("Task not found with id: " + taskId));

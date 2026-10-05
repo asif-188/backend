@@ -86,6 +86,32 @@ public class TaskController {
         return ResponseEntity.ok(updated);
     }
 
+    @PutMapping("/{id}/handover")
+    public ResponseEntity<Task> handoverTask(
+            @PathVariable String id,
+            @RequestBody Map<String, Object> payload
+    ) {
+        Task.UserRef assignee = null;
+        if (payload.containsKey("assignee") && payload.get("assignee") != null) {
+            Map<String, Object> map = (Map<String, Object>) payload.get("assignee");
+            assignee = Task.UserRef.builder()
+                    .id((String) map.get("id"))
+                    .name((String) map.get("name"))
+                    .email((String) map.get("email"))
+                    .role((String) map.get("role"))
+                    .avatar((String) map.get("avatar"))
+                    .build();
+        }
+        String status = (String) payload.get("status");
+        String completedWork = (String) payload.get("completedWork");
+        String nextSteps = (String) payload.get("nextSteps");
+        String performedBy = (String) payload.getOrDefault("performedBy", "Staff");
+        String performedByRole = (String) payload.getOrDefault("performedByRole", "STAFF");
+
+        Task updated = taskService.handoverTask(id, assignee, status, completedWork, nextSteps, performedBy, performedByRole);
+        return ResponseEntity.ok(updated);
+    }
+
     @PutMapping("/{id}/status")
     public ResponseEntity<Task> updateStatus(
             @PathVariable String id,

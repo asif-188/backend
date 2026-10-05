@@ -134,10 +134,16 @@ public class Task {
     @AllArgsConstructor
     public static class ActivityLog {
         private String id;
-        private String action; // CREATED, ASSIGNED, STATUS_CHANGED, COMMENTED, RESOLVED
+        private String action; // CREATED, ASSIGNED, HANDOVER, STATUS_CHANGED, COMMENTED, RESOLVED
         private String details;
         private String performedBy;
         private String performedByRole;
         private Long timestamp;
+        private UserRef fromAssignee;
+        private UserRef toAssignee;
+        private String completedWork;
+        private String nextSteps;
+        private String previousStatus;
+        private String newStatus;
     }
 }
