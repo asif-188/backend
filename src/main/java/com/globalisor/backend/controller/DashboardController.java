@@ -147,31 +147,24 @@ public class DashboardController {
             }
 
             String assignedStaffId = user.getAssignedStaffId() != null ? user.getAssignedStaffId() : "";
-            String assignedStaffEmail = user.getAssignedStaffEmail() != null ? user.getAssignedStaffEmail() : "";
 
             return new DashboardResponse.ClientInfo(
                     user.getId(),
                     user.getFirstName() + " " + user.getLastName(),
                     user.getEmail(),
-                    userReqs.size(),
-                    latestActivity,
-                    latestStatus,
                     companyNames,
-                    "", // phone not in User model yet
-                    0L,
+                    nomineeDirectors,
+                    serviceTypes,
+                    userReqs.size(),
                     pendingCount,
                     approvedCount,
                     rejectedCount,
-                    serviceTypes,
-                    assignedStaffName,
-                    isOnline,
-                    lastSeen,
-                    nomineeDirectors,
+                    latestStatus,
+                    latestActivity,
                     assignedStaffId,
                     assignedStaffName,
-                    assignedStaffEmail,
-                    user.getAssignedAt(),
-                    user.getAssignedBy()
+                    isOnline,
+                    lastSeen
             );
         }).collect(Collectors.toList());
 
@@ -201,14 +194,47 @@ public class DashboardController {
         stats.put("annualReturns", totalCompliancesCount);
         stats.put("slaCompliance", 98L);
 
+        // 1. Filter by search
+        if (search != null && !search.trim().isEmpty()) {
+            String s = search.trim().toLowerCase();
+            clientInfos = clientInfos.stream().filter(c ->
+                (c.getName() != null && c.getName().toLowerCase().contains(s)) ||
+                (c.getEmail() != null && c.getEmail().toLowerCase().contains(s)) ||
+                (c.getCompanyNames() != null && c.getCompanyNames().stream().anyMatch(cn -> cn != null && cn.toLowerCase().contains(s))) ||
+                (c.getNomineeDirectors() != null && c.getNomineeDirectors().stream().anyMatch(nd -> nd != null && nd.toLowerCase().contains(s)))
+            ).collect(Collectors.toList());
+        }
+
+        // 2. Filter by status
+        if (status != null && !status.trim().isEmpty() && !"ALL".equalsIgnoreCase(status.trim())) {
+            String st = status.trim().toLowerCase();
+            clientInfos = clientInfos.stream().filter(c -> {
+                String ls = c.getLatestStatus() != null ? c.getLatestStatus().toLowerCase() : "";
+                if ("review".equals(st)) return "review".equals(ls) || "under review".equals(ls);
+                if ("approved".equals(st)) return "approved".equals(ls) || "verified".equals(ls) || "completed".equals(ls);
+                return ls.equals(st);
+            }).collect(Collectors.toList());
+        }
+
+        // 3. Filter by staff
+        if (staff != null && !staff.trim().isEmpty() && !"ALL".equalsIgnoreCase(staff.trim())) {
+            String stf = staff.trim().toLowerCase();
+            clientInfos = clientInfos.stream().filter(c -> {
+                String as = c.getAssignedStaffName() != null ? c.getAssignedStaffName().toLowerCase() : "";
+                if ("unassigned".equals(stf)) return as.isEmpty() || "unassigned".equals(as);
+                return as.contains(stf);
+            }).collect(Collectors.toList());
+        }
+
         long totalElements = clientInfos.size();
         if (size > 0) {
-            int safePage = Math.max(0, page);
+            int safePage = Math.max(1, page);
             int totalPages = (int) Math.ceil((double) totalElements / size);
-            int fromIndex = Math.min(safePage * size, (int) totalElements);
+            if (totalPages == 0) totalPages = 1;
+            int fromIndex = Math.min((safePage - 1) * size, (int) totalElements);
             int toIndex = Math.min(fromIndex + size, (int) totalElements);
-            List<DashboardResponse.ClientInfo> pagedList = clientInfos.subList(fromIndex, toIndex);
-            return ResponseEntity.ok(new DashboardResponse(pagedList, stats, safePage + 1, size, totalElements, totalPages));
+            List<DashboardResponse.ClientInfo> pagedList = (fromIndex <= toIndex) ? clientInfos.subList(fromIndex, toIndex) : Collections.emptyList();
+            return ResponseEntity.ok(new DashboardResponse(pagedList, stats, safePage, size, totalElements, totalPages));
         }
 
         DashboardResponse response = new DashboardResponse(clientInfos, stats);

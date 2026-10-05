@@ -1,6 +1,7 @@
 package com.globalisor.backend.payload.response;
 
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
@@ -8,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 
 @Data
+@Builder
 @NoArgsConstructor
 @AllArgsConstructor
 public class DashboardResponse {
@@ -28,30 +30,25 @@ public class DashboardResponse {
     }
 
     @Data
+    @Builder
     @NoArgsConstructor
     @AllArgsConstructor
     public static class ClientInfo {
         private String clientId;
         private String name;
         private String email;
-        private int serviceCount;
-        private String latestActivity;
-        private String latestStatus;
         private List<String> companyNames;
-        private String phone;
-        private long createdAt;
+        private List<String> nomineeDirectors;
+        private List<String> serviceTypes;
+        private int serviceCount;
         private int pendingCount;
         private int approvedCount;
         private int rejectedCount;
-        private List<String> serviceTypes;
-        private String latestStaff;
-        private boolean isOnline;
-        private Long lastSeenTime;
-        private List<String> nomineeDirectors;
+        private String latestStatus;
+        private String latestActivity;
         private String assignedStaffId;
         private String assignedStaffName;
-        private String assignedStaffEmail;
-        private Long assignedAt;
-        private String assignedBy;
+        private boolean isOnline;
+        private Long lastSeenTime;
     }
 }
