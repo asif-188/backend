@@ -1370,35 +1370,15 @@ public class MigratedEndpointsController {
     // --- APPLICATION ENDPOINTS ---
     @GetMapping("/applications/counts")
     public ResponseEntity<Map<String, Long>> getApplicationCounts() {
-        List<Requirement> activeRequirements = requirementRepository.findAllLightweight();
-        List<Onboarding> activeOnboardings = onboardingRepository.findAllLightweight();
-
-        if (activeRequirements == null) activeRequirements = Collections.emptyList();
-        if (activeOnboardings == null) activeOnboardings = Collections.emptyList();
+        List<Map<String, Object>> apps = getAllApplications(null, null, false).getBody();
+        if (apps == null) apps = Collections.emptyList();
 
         long pending = 0;
         long rejected = 0;
-        long all = 0;
-        Set<String> processedClientIds = new HashSet<>();
+        long all = apps.size();
 
-        for (Requirement r : activeRequirements) {
-            String st = r.getStatus() != null ? r.getStatus().trim().toLowerCase() : "pending";
-            if (st.contains("approved") || st.contains("completed")) continue;
-            if (r.getUserId() != null) processedClientIds.add(r.getUserId());
-            all++;
-            if (st.contains("rejected") || st.contains("revision")) {
-                rejected++;
-            } else {
-                pending++;
-            }
-        }
-
-        for (Onboarding o : activeOnboardings) {
-            String uId = o.getClientId();
-            if (uId != null && processedClientIds.contains(uId)) continue;
-            String st = o.getStatus() != null ? o.getStatus().trim().toLowerCase() : "in_progress";
-            if (st.contains("approved") || st.contains("completed")) continue;
-            all++;
+        for (Map<String, Object> a : apps) {
+            String st = String.valueOf(a.getOrDefault("status", "pending")).toLowerCase();
             if (st.contains("rejected") || st.contains("revision")) {
                 rejected++;
             } else {
