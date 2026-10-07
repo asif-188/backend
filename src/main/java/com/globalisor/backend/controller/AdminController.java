@@ -570,7 +570,12 @@ public class AdminController {
             Map<String, Object> item = new HashMap<>();
             User client = userMap.get(req.getUserId());
             item.put("id", req.getId());
-            item.put("applicationId", req.getId() != null ? req.getId().replace("SRV-", "APP-") : "");
+            String appRef = req.getApplicationReferenceNo();
+            if (appRef == null || appRef.trim().isEmpty() || !appRef.startsWith("APP-")) {
+                appRef = req.getId() != null ? req.getId().replace("SRV-", "APP-") : "";
+            }
+            item.put("applicationId", appRef);
+            item.put("applicationReferenceNo", appRef);
             item.put("userId", req.getUserId());
             item.put("status", req.getStatus());
             item.put("staff", req.getStaff());
@@ -613,6 +618,11 @@ public class AdminController {
         Optional<Requirement> req = requirementRepository.findById(id);
         if (req.isPresent()) return req;
         if (id.startsWith("APP-")) {
+            for (Requirement r : requirementRepository.findAll()) {
+                if (id.equalsIgnoreCase(r.getApplicationReferenceNo())) {
+                    return Optional.of(r);
+                }
+            }
             req = requirementRepository.findById(id.replace("APP-", "SRV-"));
             if (req.isPresent()) return req;
         }

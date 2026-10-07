@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -47,6 +48,29 @@ public class NotificationService {
         if (lastSent != null && (now - lastSent) < 10000L) {
             // Duplicate notification within 10 seconds, skip creating duplicate record
             return;
+        }
+
+        // Single Notification per Task in Admin: deduplicate so there is only one notification per task
+        boolean isTaskNotif = (type != null && type.toLowerCase().contains("task")) || 
+                             (relatedId != null && (relatedId.startsWith("task-") || relatedId.toLowerCase().contains("task")));
+        if (isTaskNotif && relatedId != null && !relatedId.trim().isEmpty() && "staff-admin".equalsIgnoreCase(normalizedTarget)) {
+            List<Notification> existingList = notificationRepository.findByClientIdAndRelatedId("staff-admin", relatedId);
+            if (existingList != null && !existingList.isEmpty()) {
+                Notification existing = existingList.get(0);
+                existing.setTitle(title);
+                existing.setMessage(message);
+                existing.setType(type);
+                existing.setPriority(priority != null ? priority : existing.getPriority());
+                if (link != null) existing.setLink(link);
+                existing.setTimestamp(now);
+                existing.setReadBy(new ArrayList<>());
+                notificationRepository.save(existing);
+                for (int i = 1; i < existingList.size(); i++) {
+                    try { notificationRepository.delete(existingList.get(i)); } catch (Exception ignored) {}
+                }
+                chatWebSocketHandler.broadcastNotification(existing);
+                return;
+            }
         }
 
         Notification notif = new Notification();

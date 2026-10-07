@@ -20,6 +20,8 @@ public class Requirement {
     private String userId;
     @Indexed
     private String status = "pending";
+    @Indexed
+    private String applicationReferenceNo;
     private String staff = "Unassigned";
     @Indexed
     private String assignedStaffId;

@@ -14,4 +14,8 @@ public interface NotificationRepository extends MongoRepository<Notification, St
     List<Notification> findNotificationsForClient(String clientId);
 
     List<Notification> findByClientIdIn(Collection<String> clientIds);
+
+    List<Notification> findByClientIdAndRelatedId(String clientId, String relatedId);
+
+    List<Notification> findByRelatedId(String relatedId);
 }

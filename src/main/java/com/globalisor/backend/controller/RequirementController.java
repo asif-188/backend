@@ -69,11 +69,20 @@ public class RequirementController {
         
         Optional<Requirement> req = requirementRepository.findFirstByUserIdOrderByUpdatedAtDesc(userDetails.getId());
         if (req.isPresent()) {
+            Requirement r = req.get();
+            if (r.getApplicationReferenceNo() == null || r.getApplicationReferenceNo().trim().isEmpty() || !r.getApplicationReferenceNo().startsWith("APP-")) {
+                r.setApplicationReferenceNo(generateNextApplicationReferenceNo(r));
+                if (r.getData() != null) {
+                    r.getData().put("applicationReferenceNo", r.getApplicationReferenceNo());
+                }
+                requirementRepository.save(r);
+            }
             Map<String, Object> response = new HashMap<>();
-            response.put("status", req.get().getStatus());
-            response.put("data", req.get().getData());
-            response.put("sectionStatuses", req.get().getSectionStatuses());
-            response.put("applicationId", req.get().getId());
+            response.put("status", r.getStatus());
+            response.put("data", r.getData());
+            response.put("sectionStatuses", r.getSectionStatuses());
+            response.put("applicationId", r.getId());
+            response.put("applicationReferenceNo", r.getApplicationReferenceNo());
             return ResponseEntity.ok(response);
         } else {
             Map<String, Object> response = new HashMap<>();
@@ -122,15 +131,20 @@ public class RequirementController {
             requirement.setCreatedAt(new java.util.Date());
             requirement.setUpdatedAt(new java.util.Date());
         }
+        if (requirement.getApplicationReferenceNo() == null || requirement.getApplicationReferenceNo().trim().isEmpty() || !requirement.getApplicationReferenceNo().startsWith("APP-")) {
+            requirement.setApplicationReferenceNo(generateNextApplicationReferenceNo(requirement));
+        }
+        if (requirement.getData() != null) {
+            requirement.getData().put("applicationReferenceNo", requirement.getApplicationReferenceNo());
+        }
         requirementRepository.save(requirement);
-        
-
         
         Map<String, Object> response = new HashMap<>();
         response.put("status", requirement.getStatus());
         response.put("data", requirement.getData());
         response.put("sectionStatuses", requirement.getSectionStatuses());
         response.put("applicationId", requirement.getId());
+        response.put("applicationReferenceNo", requirement.getApplicationReferenceNo());
         return ResponseEntity.ok(response);
     }
 
@@ -211,11 +225,20 @@ public class RequirementController {
             );
         } catch (Exception e) {}
 
+        if (requirement.getApplicationReferenceNo() == null || requirement.getApplicationReferenceNo().trim().isEmpty() || !requirement.getApplicationReferenceNo().startsWith("APP-")) {
+            requirement.setApplicationReferenceNo(generateNextApplicationReferenceNo(requirement));
+        }
+        if (requirement.getData() != null) {
+            requirement.getData().put("applicationReferenceNo", requirement.getApplicationReferenceNo());
+        }
+        requirementRepository.save(requirement);
+
         Map<String, Object> response = new HashMap<>();
         response.put("status", requirement.getStatus());
         response.put("data", requirement.getData());
         response.put("sectionStatuses", requirement.getSectionStatuses());
         response.put("applicationId", requirement.getId());
+        response.put("applicationReferenceNo", requirement.getApplicationReferenceNo());
         return ResponseEntity.ok(response);
     }
 
@@ -236,6 +259,12 @@ public class RequirementController {
             requirement.setUpdatedAt(new java.util.Date());
         } else {
             requirement = new Requirement(userDetails.getId(), data);
+        }
+        if (requirement.getApplicationReferenceNo() == null || requirement.getApplicationReferenceNo().trim().isEmpty() || !requirement.getApplicationReferenceNo().startsWith("APP-")) {
+            requirement.setApplicationReferenceNo(generateNextApplicationReferenceNo(requirement));
+        }
+        if (requirement.getData() != null) {
+            requirement.getData().put("applicationReferenceNo", requirement.getApplicationReferenceNo());
         }
         requirementRepository.save(requirement);
 
@@ -268,6 +297,7 @@ public class RequirementController {
         response.put("data", requirement.getData());
         response.put("sectionStatuses", requirement.getSectionStatuses());
         response.put("applicationId", requirement.getId());
+        response.put("applicationReferenceNo", requirement.getApplicationReferenceNo());
         return ResponseEntity.ok(response);
     }
 
@@ -428,6 +458,12 @@ public class RequirementController {
             requirement.setCreatedAt(new Date());
             requirement.setUpdatedAt(new Date());
         }
+        if (requirement.getApplicationReferenceNo() == null || requirement.getApplicationReferenceNo().trim().isEmpty() || !requirement.getApplicationReferenceNo().startsWith("APP-")) {
+            requirement.setApplicationReferenceNo(generateNextApplicationReferenceNo(requirement));
+        }
+        if (requirement.getData() != null) {
+            requirement.getData().put("applicationReferenceNo", requirement.getApplicationReferenceNo());
+        }
         requirementRepository.save(requirement);
 
         // 4. Synchronize with Onboarding and KYC records
@@ -466,6 +502,7 @@ public class RequirementController {
         response.put("status", requirement.getStatus());
         response.put("data", requirement.getData());
         response.put("applicationId", requirement.getId());
+        response.put("applicationReferenceNo", requirement.getApplicationReferenceNo());
         response.put("email", email);
         response.put("password", rawPassword);
         response.put("firstName", firstName);
@@ -613,5 +650,53 @@ public class RequirementController {
                 }
             }
         }
+    }
+
+    private synchronized String generateNextApplicationReferenceNo(Requirement requirement) {
+        if (requirement != null && requirement.getApplicationReferenceNo() != null 
+                && !requirement.getApplicationReferenceNo().trim().isEmpty() 
+                && requirement.getApplicationReferenceNo().startsWith("APP-")) {
+            return requirement.getApplicationReferenceNo();
+        }
+
+        // Count existing clients exactly as displayed in Admin > Clients > Total Clients
+        long clientCount = 0;
+        try {
+            List<User> users = userRepository.findAll();
+            clientCount = users.stream().filter(u -> {
+                String role = u.getRole();
+                if (role != null) {
+                    String trimmedRole = role.trim();
+                    if (trimmedRole.equalsIgnoreCase("ADMIN") || trimmedRole.equalsIgnoreCase("STAFF")) {
+                        return false;
+                    }
+                }
+                return !"PENDING_APPROVAL".equalsIgnoreCase(u.getStatus());
+            }).count();
+        } catch (Exception e) {}
+
+        long highestNumber = clientCount;
+
+        // Check if existing applications in database already have higher numbers
+        try {
+            List<Requirement> allReqs = requirementRepository.findAll();
+            for (Requirement r : allReqs) {
+                String ref = r.getApplicationReferenceNo();
+                if (ref != null && ref.startsWith("APP-")) {
+                    String digits = ref.substring(4).replaceAll("[^0-9]", "");
+                    if (!digits.isEmpty()) {
+                        try {
+                            long val = Long.parseLong(digits);
+                            if (val > highestNumber) {
+                                highestNumber = val;
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }
+            }
+        } catch (Exception e) {}
+
+        long nextNum = highestNumber + 1;
+        return String.format("APP-%04d", nextNum);
     }
 }
