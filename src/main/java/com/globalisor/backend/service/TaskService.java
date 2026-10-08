@@ -247,9 +247,14 @@ public class TaskService {
     }
 
     public Task createTask(Task task) {
-        long count = taskRepository.count();
-        if (task.getTicketNumber() == null || task.getTicketNumber().isEmpty()) {
-            task.setTicketNumber("TSK-" + (1000 + count + 1));
+        if (task.getTicketNumber() == null || task.getTicketNumber().trim().isEmpty()) {
+            long nextNum = 1001 + taskRepository.count();
+            String candidate = "TSK-" + nextNum;
+            while (taskRepository.findByTicketNumber(candidate).isPresent()) {
+                nextNum++;
+                candidate = "TSK-" + nextNum;
+            }
+            task.setTicketNumber(candidate);
         }
         
         long now = System.currentTimeMillis();
@@ -278,7 +283,7 @@ public class TaskService {
         }
         
         if (task.getStatus() == null || task.getStatus().isEmpty()) {
-            task.setStatus("PENDING");
+            task.setStatus(task.getAssignedTo() != null && task.getAssignedTo().getId() != null ? "ASSIGNED" : "PENDING");
         }
         if (task.getPriority() == null || task.getPriority().isEmpty()) {
             task.setPriority("MEDIUM");
@@ -293,14 +298,18 @@ public class TaskService {
             task.setActivityLog(new ArrayList<>());
         }
 
-        String creatorName = task.getCreatedBy() != null ? task.getCreatedBy().getName() : "Staff";
-        String creatorRole = task.getCreatedBy() != null ? task.getCreatedBy().getRole() : "STAFF";
+        String creatorName = (task.getCreatedBy() != null && task.getCreatedBy().getName() != null && !task.getCreatedBy().getName().trim().isEmpty())
+                ? task.getCreatedBy().getName().trim()
+                : "Staff";
+        String creatorRole = (task.getCreatedBy() != null && task.getCreatedBy().getRole() != null && !task.getCreatedBy().getRole().trim().isEmpty())
+                ? task.getCreatedBy().getRole().trim()
+                : "STAFF";
 
         String logDetails = isInternalTask
-                ? "Internal task created: " + task.getTitle()
-                : (creatorRole.equalsIgnoreCase("CLIENT")
-                    ? "Task submitted by client: " + task.getTitle()
-                    : "Task created against client by " + creatorName + ": " + task.getTitle());
+                ? "Internal task created: " + (task.getTitle() != null ? task.getTitle() : "Untitled")
+                : ("CLIENT".equalsIgnoreCase(creatorRole)
+                    ? "Task submitted by client: " + (task.getTitle() != null ? task.getTitle() : "Untitled")
+                    : "Task created against client by " + creatorName + ": " + (task.getTitle() != null ? task.getTitle() : "Untitled"));
 
         task.getActivityLog().add(Task.ActivityLog.builder()
                 .id("act-" + UUID.randomUUID())
@@ -313,38 +322,46 @@ public class TaskService {
 
         Task saved = taskRepository.save(task);
 
-        if (isInternalTask) {
-            // Notify assigned staff/admin for internal task
-            if (task.getAssignedTo() != null && task.getAssignedTo().getId() != null) {
-                try {
+        try {
+            if (isInternalTask) {
+                // Notify assigned staff/admin for internal task
+                if (saved.getAssignedTo() != null && saved.getAssignedTo().getId() != null) {
                     notificationService.sendNotification(
-                            task.getAssignedTo().getId(),
-                            "New Internal Task: " + task.getTicketNumber(),
-                            "You have been assigned an internal to-do: " + task.getTitle(),
+                            saved.getAssignedTo().getId(),
+                            "New Internal Task: " + saved.getTicketNumber(),
+                            "You have been assigned an internal to-do: " + saved.getTitle(),
                             "TASK_ASSIGNED",
                             saved.getId(),
                             "Info"
                     );
-                } catch (Exception ignored) {}
-            }
-        } else {
-            // Notify client for client task
-            try {
-                if (task.getClientId() != null) {
+                }
+            } else {
+                // Notify assigned staff if assigned on creation
+                if (saved.getAssignedTo() != null && saved.getAssignedTo().getId() != null) {
                     notificationService.sendNotification(
-                            task.getClientId(),
-                            "Task Raised: " + task.getTicketNumber(),
-                            "A task '" + task.getTitle() + "' has been logged for your company.",
+                            saved.getAssignedTo().getId(),
+                            "New Task Assigned: " + saved.getTicketNumber(),
+                            "You have been assigned to handle: " + saved.getTitle(),
+                            "TASK_ASSIGNED",
+                            saved.getId(),
+                            "Warning"
+                    );
+                }
+
+                // Notify client for client task
+                if (saved.getClientId() != null && !saved.getClientId().isEmpty()) {
+                    notificationService.sendNotification(
+                            saved.getClientId(),
+                            "Task Raised: " + saved.getTicketNumber(),
+                            "A task '" + saved.getTitle() + "' has been logged for your company.",
                             "TASK_CREATED",
                             saved.getId(),
                             "Info",
                             "/client/portal.html?tab=tasks"
                     );
                 }
-            } catch (Exception ignored) {}
 
-            // Notify admin & staff for real-time toast notification
-            try {
+                // Notify admin & staff for real-time toast notification
                 String clientLabel = saved.getClientName() != null ? saved.getClientName() : "Client";
                 if (saved.getCompanyName() != null && !saved.getCompanyName().isEmpty()) {
                     clientLabel += " (" + saved.getCompanyName() + ")";
@@ -358,8 +375,8 @@ public class TaskService {
                         "High",
                         "tasks.html?id=" + saved.getId()
                 );
-            } catch (Exception ignored) {}
-        }
+            }
+        } catch (Throwable ignored) {}
 
         return saved;
     }
