@@ -657,6 +657,17 @@ public class AdminController {
                         return Optional.of(r);
                     }
                 }
+                String rawId = r.getId() != null ? r.getId().trim() : "";
+                if (rawId.matches("^[0-9a-fA-F]{24}$")) {
+                    String last4 = rawId.substring(rawId.length() - 4);
+                    try {
+                        long hexVal = Long.parseLong(last4, 16);
+                        long appNum = (hexVal % 9000) + 1000;
+                        if (id.equalsIgnoreCase(String.format("APP-%04d", appNum))) {
+                            return Optional.of(r);
+                        }
+                    } catch (Exception ignored) {}
+                }
             }
             req = requirementRepository.findById(id.replace("APP-", "SRV-"));
             if (req.isPresent()) return req;

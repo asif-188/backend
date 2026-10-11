@@ -14,7 +14,7 @@ public class ComplianceBoxServiceTest {
     public void testSyncCustomDirectHttp() {
         ComplianceBoxService service = new ComplianceBoxService();
         ReflectionTestUtils.setField(service, "complianceBoxApiUrl", "https://api.compliancebox.co/api/clients");
-        ReflectionTestUtils.setField(service, "complianceBoxToken", "4d3693b0-201c-4204-9729-e7d779a613b6");
+        ReflectionTestUtils.setField(service, "complianceBoxToken", "1efb62b2-4f40-4f7b-b08b-4fc641932eda");
         ReflectionTestUtils.setField(service, "complianceBoxCompanyId", "629dbca7374a1ac76b559ee7");
 
         Map<String, Object> payload = new HashMap<>();

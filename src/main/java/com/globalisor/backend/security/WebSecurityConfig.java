@@ -100,6 +100,7 @@ public class WebSecurityConfig {
                         .requestMatchers("/api/admin/intelligence/**").permitAll()
                         .requestMatchers("/api/tasks", "/api/tasks/**").permitAll()
                         .requestMatchers("/api/staff", "/api/staff/**").permitAll()
+                        .requestMatchers("/api/integrations/**").permitAll()
                         .requestMatchers("/error").permitAll()
                         .anyRequest().authenticated()
                 );

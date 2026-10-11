@@ -385,8 +385,9 @@ public class ComplianceBoxService {
                 Map<String, Object> refreshRes = refreshBrowserToken();
                 if (Boolean.TRUE.equals(refreshRes.get("success")) && refreshRes.get("token") != null) {
                     String newToken = refreshRes.get("token").toString().trim();
-                    if (!newToken.isEmpty() && !newToken.equals(token)) {
+                    if (!newToken.isEmpty()) {
                         logger.info("Found fresh token from browser. Retrying ComplianceBox sync...");
+                        this.complianceBoxToken = newToken;
                         HttpRequest retryRequest = HttpRequest.newBuilder()
                                 .uri(URI.create(complianceBoxApiUrl))
                                 .timeout(Duration.ofSeconds(20))
@@ -443,6 +444,24 @@ public class ComplianceBoxService {
         }
     }
 
+    private String findNodeExecutable() {
+        String[] possiblePaths = {
+            "/opt/homebrew/bin/node",
+            "/usr/local/bin/node",
+            "/usr/bin/node",
+            "node"
+        };
+        for (String p : possiblePaths) {
+            try {
+                File f = new File(p);
+                if (f.exists() && f.canExecute()) {
+                    return p;
+                }
+            } catch (Exception ignored) {}
+        }
+        return "node";
+    }
+
     public Map<String, Object> refreshBrowserToken() {
         Map<String, Object> result = new HashMap<>();
         try {
@@ -456,7 +475,7 @@ public class ComplianceBoxService {
                 return result;
             }
 
-            ProcessBuilder pb = new ProcessBuilder("node", script.getAbsolutePath());
+            ProcessBuilder pb = new ProcessBuilder(findNodeExecutable(), script.getAbsolutePath());
             pb.directory(script.getParentFile());
             Process process = pb.start();
             String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
@@ -466,6 +485,9 @@ public class ComplianceBoxService {
             if (output.startsWith("{")) {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> parsed = objectMapper.readValue(output, Map.class);
+                if (Boolean.TRUE.equals(parsed.get("success")) && parsed.get("token") != null) {
+                    this.complianceBoxToken = parsed.get("token").toString().trim();
+                }
                 return parsed;
             } else {
                 result.put("success", false);
@@ -512,7 +534,7 @@ public class ComplianceBoxService {
         if (complianceBoxToken != null && !complianceBoxToken.trim().isEmpty()) {
             return complianceBoxToken.trim();
         }
-        return "4d3693b0-201c-4204-9729-e7d779a613b6";
+        return "1efb62b2-4f40-4f7b-b08b-4fc641932eda";
     }
 
     private String resolveCompanyId() {
@@ -538,31 +560,84 @@ public class ComplianceBoxService {
         return sb.toString();
     }
 
+    public String resolveApplicationDisplayId(Requirement req) {
+        if (req == null) return "APP-0001";
+        if (req.getApplicationReferenceNo() != null && !req.getApplicationReferenceNo().trim().isEmpty() 
+                && req.getApplicationReferenceNo().trim().startsWith("APP-")) {
+            return req.getApplicationReferenceNo().trim();
+        }
+        if (req.getData() != null) {
+            Object ref = req.getData().get("applicationReferenceNo");
+            if (ref != null && !ref.toString().trim().isEmpty() && ref.toString().trim().startsWith("APP-")) {
+                return ref.toString().trim();
+            }
+            Object num = req.getData().get("applicationNumber");
+            if (num != null && !num.toString().trim().isEmpty()) {
+                String strNum = num.toString().trim();
+                return strNum.startsWith("APP-") ? strNum : ("APP-" + strNum);
+            }
+        }
+        String rawId = req.getId() != null ? req.getId().trim() : "";
+        if (rawId.startsWith("APP-")) {
+            return rawId;
+        }
+        if (rawId.startsWith("SRV-")) {
+            return rawId.replace("SRV-", "APP-");
+        }
+        if (rawId.matches("^[0-9a-fA-F]{24}$")) {
+            String last4 = rawId.substring(rawId.length() - 4);
+            if (last4.matches("^\\d{4}$")) {
+                return "APP-" + last4;
+            }
+            try {
+                long hexVal = Long.parseLong(last4, 16);
+                long appNum = (hexVal % 9000) + 1000;
+                return String.format("APP-%04d", appNum);
+            } catch (Exception e) {
+                return "APP-" + last4.toUpperCase();
+            }
+        }
+        if (rawId.startsWith("REQ-")) {
+            return rawId.replace("REQ-", "APP-");
+        }
+        return rawId.isEmpty() ? ("APP-" + (System.currentTimeMillis() % 10000)) : ("APP-" + rawId);
+    }
+
     private Requirement findRequirementFlexible(String id) {
         if (id == null) return null;
-        Optional<Requirement> r = requirementRepository.findById(id);
+        String trimmed = id.trim();
+        Optional<Requirement> r = requirementRepository.findById(trimmed);
         if (r.isPresent()) return r.get();
         
-        String cleanId = id.replace("APP-", "").trim();
+        String cleanId = trimmed.replace("APP-", "").trim();
         r = requirementRepository.findById(cleanId);
         if (r.isPresent()) return r.get();
 
-        for (Requirement req : requirementRepository.findAll()) {
-            if (req.getId() != null && (req.getId().equalsIgnoreCase(id) || req.getId().equalsIgnoreCase(cleanId))) {
-                return req;
+        List<Requirement> all = requirementRepository.findAllLightweight();
+        if (all == null || all.isEmpty()) {
+            all = requirementRepository.findAll();
+        }
+        for (Requirement req : all) {
+            if (req.getId() != null && (req.getId().equalsIgnoreCase(trimmed) || req.getId().equalsIgnoreCase(cleanId))) {
+                return requirementRepository.findById(req.getId()).orElse(req);
             }
-            if (req.getApplicationReferenceNo() != null && (req.getApplicationReferenceNo().equalsIgnoreCase(id) || req.getApplicationReferenceNo().equalsIgnoreCase(cleanId))) {
-                return req;
+            if (req.getApplicationReferenceNo() != null && (req.getApplicationReferenceNo().equalsIgnoreCase(trimmed) || req.getApplicationReferenceNo().equalsIgnoreCase(cleanId))) {
+                return requirementRepository.findById(req.getId()).orElse(req);
             }
             if (req.getData() != null) {
                 Object appRef = req.getData().get("applicationReferenceNo");
-                if (appRef != null && (appRef.toString().equalsIgnoreCase(id) || appRef.toString().equalsIgnoreCase(cleanId))) {
-                    return req;
+                if (appRef != null && (appRef.toString().equalsIgnoreCase(trimmed) || appRef.toString().equalsIgnoreCase(cleanId))) {
+                    return requirementRepository.findById(req.getId()).orElse(req);
                 }
                 Object appNum = req.getData().get("applicationNumber");
-                if (appNum != null && (appNum.toString().equalsIgnoreCase(id) || appNum.toString().equalsIgnoreCase(cleanId) || ("APP-" + appNum.toString()).equalsIgnoreCase(id))) {
-                    return req;
+                if (appNum != null && (appNum.toString().equalsIgnoreCase(trimmed) || appNum.toString().equalsIgnoreCase(cleanId) || ("APP-" + appNum.toString()).equalsIgnoreCase(trimmed))) {
+                    return requirementRepository.findById(req.getId()).orElse(req);
                 }
+            }
+            // Check dynamic display ID (e.g. APP-4458, APP-4461)
+            String dispId = resolveApplicationDisplayId(req);
+            if (dispId != null && (dispId.equalsIgnoreCase(trimmed) || dispId.replace("APP-", "").equalsIgnoreCase(cleanId))) {
+                return requirementRepository.findById(req.getId()).orElse(req);
             }
         }
         return null;
