@@ -1102,6 +1102,22 @@ public class AdminController {
         return ResponseEntity.ok(complianceBoxService.refreshBrowserToken());
     }
 
+    @PostMapping({"/applications/compliancebox/token", "/admin/applications/compliancebox/token"})
+    public ResponseEntity<?> updateComplianceBoxToken(@RequestBody Map<String, Object> body) {
+        String token = body != null && body.containsKey("token") ? String.valueOf(body.get("token")).trim() : "";
+        if (token.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("success", false, "error", "Token is required"));
+        }
+        complianceBoxService.saveToken(token);
+        return ResponseEntity.ok(Map.of("success", true, "message", "ComplianceBox token updated successfully in database", "token", token));
+    }
+
+    @GetMapping({"/applications/compliancebox/token", "/admin/applications/compliancebox/token"})
+    public ResponseEntity<?> getComplianceBoxToken() {
+        String token = complianceBoxService.resolveToken();
+        return ResponseEntity.ok(Map.of("success", true, "token", token));
+    }
+
     @PostMapping("/admin/applications/{id}/reject")
     public ResponseEntity<?> rejectApplication(@PathVariable String id, @RequestBody(required = false) Map<String, Object> body) {
         Optional<Requirement> reqOpt = findRequirementFlexible(id);

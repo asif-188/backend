@@ -41,7 +41,40 @@ public class ComplianceBoxService {
     @Autowired
     private UserRepository userRepository;
 
+    @Autowired(required = false)
+    private org.springframework.data.mongodb.core.MongoTemplate mongoTemplate;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    public void saveToken(String token) {
+        if (token == null || token.trim().isEmpty()) return;
+        this.complianceBoxToken = token.trim();
+        if (mongoTemplate != null) {
+            try {
+                org.bson.Document doc = new org.bson.Document();
+                doc.put("_id", "compliancebox");
+                doc.put("token", token.trim());
+                doc.put("updatedAt", new Date());
+                mongoTemplate.getCollection("integration_configs")
+                        .replaceOne(new org.bson.Document("_id", "compliancebox"), doc, new com.mongodb.client.model.ReplaceOptions().upsert(true));
+                logger.info("Successfully persisted ComplianceBox token to MongoDB integration_configs");
+            } catch (Exception e) {
+                logger.warn("Could not save ComplianceBox token to MongoDB: {}", e.getMessage());
+            }
+        }
+        try {
+            File tokenFile = new File("scripts/compliancebox_token.json");
+            if (!tokenFile.exists()) {
+                tokenFile = new File("../scripts/compliancebox_token.json");
+            }
+            if (tokenFile.getParentFile() != null && tokenFile.getParentFile().exists()) {
+                Map<String, Object> map = new HashMap<>();
+                map.put("token", token.trim());
+                map.put("updatedAt", new Date().toString());
+                objectMapper.writeValue(tokenFile, map);
+            }
+        } catch (Exception ignored) {}
+    }
 
     public Map<String, Object> syncApplication(String applicationId) {
         return syncApplication(applicationId, null);
@@ -486,7 +519,7 @@ public class ComplianceBoxService {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> parsed = objectMapper.readValue(output, Map.class);
                 if (Boolean.TRUE.equals(parsed.get("success")) && parsed.get("token") != null) {
-                    this.complianceBoxToken = parsed.get("token").toString().trim();
+                    saveToken(parsed.get("token").toString().trim());
                 }
                 return parsed;
             } else {
@@ -502,13 +535,25 @@ public class ComplianceBoxService {
         }
     }
 
-    private String resolveToken() {
+    public String resolveToken() {
         String envToken = System.getenv("COMPLIANCEBOX_TOKEN");
         if (envToken != null && !envToken.trim().isEmpty()) return envToken.trim();
 
         String sysToken = System.getProperty("compliancebox.token");
         if (sysToken != null && !sysToken.trim().isEmpty()) return sysToken.trim();
 
+        // 1. Check MongoDB integration_configs
+        if (mongoTemplate != null) {
+            try {
+                org.bson.Document doc = mongoTemplate.getCollection("integration_configs")
+                        .find(new org.bson.Document("_id", "compliancebox")).first();
+                if (doc != null && doc.getString("token") != null && !doc.getString("token").trim().isEmpty()) {
+                    return doc.getString("token").trim();
+                }
+            } catch (Exception ignored) {}
+        }
+
+        // 2. Check local token file (localhost)
         try {
             File tokenFile = new File("scripts/compliancebox_token.json");
             if (!tokenFile.exists()) {
@@ -519,13 +564,6 @@ public class ComplianceBoxService {
                 Map<String, Object> map = objectMapper.readValue(tokenFile, Map.class);
                 if (map != null && map.containsKey("token") && map.get("token") != null) {
                     String t = map.get("token").toString().trim();
-                    if (!t.isEmpty()) return t;
-                }
-            } else {
-                // If token file not present, try quick check from active browser
-                Map<String, Object> browserRes = refreshBrowserToken();
-                if (Boolean.TRUE.equals(browserRes.get("success")) && browserRes.get("token") != null) {
-                    String t = browserRes.get("token").toString().trim();
                     if (!t.isEmpty()) return t;
                 }
             }

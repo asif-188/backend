@@ -52,4 +52,20 @@ public class ComplianceBoxController {
         Map<String, Object> result = complianceBoxService.refreshBrowserToken();
         return ResponseEntity.ok(result);
     }
+
+    @PostMapping("/token")
+    public ResponseEntity<?> updateToken(@RequestBody Map<String, Object> body) {
+        String token = body != null && body.containsKey("token") ? String.valueOf(body.get("token")).trim() : "";
+        if (token.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("success", false, "error", "Token is required"));
+        }
+        complianceBoxService.saveToken(token);
+        return ResponseEntity.ok(Map.of("success", true, "message", "ComplianceBox token updated successfully in database", "token", token));
+    }
+
+    @GetMapping("/token")
+    public ResponseEntity<?> getToken() {
+        String token = complianceBoxService.resolveToken();
+        return ResponseEntity.ok(Map.of("success", true, "token", token));
+    }
 }
