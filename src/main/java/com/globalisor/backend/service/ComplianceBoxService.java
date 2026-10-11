@@ -339,9 +339,16 @@ public class ComplianceBoxService {
             if (req.getId() != null && (req.getId().equalsIgnoreCase(id) || req.getId().equalsIgnoreCase(cleanId))) {
                 return req;
             }
+            if (req.getApplicationReferenceNo() != null && (req.getApplicationReferenceNo().equalsIgnoreCase(id) || req.getApplicationReferenceNo().equalsIgnoreCase(cleanId))) {
+                return req;
+            }
             if (req.getData() != null) {
+                Object appRef = req.getData().get("applicationReferenceNo");
+                if (appRef != null && (appRef.toString().equalsIgnoreCase(id) || appRef.toString().equalsIgnoreCase(cleanId))) {
+                    return req;
+                }
                 Object appNum = req.getData().get("applicationNumber");
-                if (appNum != null && (appNum.toString().equalsIgnoreCase(id) || appNum.toString().equalsIgnoreCase(cleanId))) {
+                if (appNum != null && (appNum.toString().equalsIgnoreCase(id) || appNum.toString().equalsIgnoreCase(cleanId) || ("APP-" + appNum.toString()).equalsIgnoreCase(id))) {
                     return req;
                 }
             }

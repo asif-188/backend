@@ -1370,7 +1370,7 @@ public class MigratedEndpointsController {
     // --- APPLICATION ENDPOINTS ---
     @GetMapping("/applications/counts")
     public ResponseEntity<Map<String, Long>> getApplicationCounts() {
-        List<Map<String, Object>> apps = getAllApplications(null, null, false).getBody();
+        List<Map<String, Object>> apps = getAllApplications(null, null, null, null, false).getBody();
         if (apps == null) apps = Collections.emptyList();
 
         long pending = 0;
@@ -1393,10 +1393,16 @@ public class MigratedEndpointsController {
         return ResponseEntity.ok(res);
     }
 
+    public ResponseEntity<List<Map<String, Object>>> getAllApplications(String tab, String statusFilter, boolean includeAll) {
+        return getAllApplications(tab, statusFilter, null, null, includeAll);
+    }
+
     @GetMapping("/applications")
     public ResponseEntity<List<Map<String, Object>>> getAllApplications(
             @RequestParam(value = "tab", required = false) String tab,
             @RequestParam(value = "status", required = false) String statusFilter,
+            @RequestParam(value = "type", required = false) String typeFilter,
+            @RequestParam(value = "queue", required = false) String queueFilter,
             @RequestParam(value = "all", defaultValue = "false") boolean includeAll) {
         List<Requirement> activeRequirements = requirementRepository.findAllLightweight();
         List<Onboarding> activeOnboardings = onboardingRepository.findAllLightweight();
@@ -1467,8 +1473,12 @@ public class MigratedEndpointsController {
             String uId = req.getUserId();
             if (uId != null) processedClientIds.add(uId);
 
-            map.put("id", req.getId() != null ? req.getId() : ("APP-" + System.currentTimeMillis()));
+            String displayAppId = resolveApplicationDisplayId(req);
+            map.put("id", displayAppId);
+            map.put("applicationId", displayAppId);
+            map.put("applicationReferenceNo", displayAppId);
             map.put("rawId", req.getId());
+            map.put("mongoId", req.getId());
             map.put("complianceBoxSynced", req.getData() != null && Boolean.TRUE.equals(req.getData().get("complianceBoxSynced")));
             map.put("complianceBoxSyncedAt", req.getData() != null ? req.getData().get("complianceBoxSyncedAt") : null);
             map.put("data", sanitizeSummaryData(req.getData()));
@@ -1487,6 +1497,10 @@ public class MigratedEndpointsController {
 
             String status = req.getStatus() != null && !req.getStatus().trim().isEmpty() ? req.getStatus().trim() : "pending";
             map.put("status", status);
+
+            boolean isMigrated = isMigratedRequirement(req);
+            map.put("isMigrated", isMigrated);
+            map.put("applicationType", isMigrated ? "MIGRATED_CLIENT" : "INCORPORATION");
 
             // Priority & Deadline
             String priority = "Normal";
@@ -1548,6 +1562,8 @@ public class MigratedEndpointsController {
             map.put("assignedStaffName", "Unassigned");
 
             map.put("status", status);
+            map.put("isMigrated", false);
+            map.put("applicationType", "INCORPORATION");
             map.put("priority", "Normal");
             map.put("deadline", "N/A");
 
@@ -1605,6 +1621,13 @@ public class MigratedEndpointsController {
                 String st = String.valueOf(a.getOrDefault("status", "")).toLowerCase();
                 return st.contains(sf);
             }).collect(Collectors.toList());
+        }
+
+        // 4. Incorporation / Migrated Filter from backend
+        if ("incorporation".equalsIgnoreCase(typeFilter) || "pickup".equalsIgnoreCase(queueFilter) || "available".equalsIgnoreCase(tab)) {
+            apps = apps.stream()
+                    .filter(a -> !Boolean.TRUE.equals(a.get("isMigrated")))
+                    .collect(Collectors.toList());
         }
 
         return ResponseEntity.ok(apps);
@@ -1691,6 +1714,88 @@ public class MigratedEndpointsController {
             }
         }
         return "Applicant";
+    }
+
+    private boolean isMigratedRequirement(Requirement req) {
+        if (req == null) return false;
+        String id = req.getId() != null ? req.getId() : "";
+        String userId = req.getUserId() != null ? req.getUserId() : "";
+        Map<String, Object> data = req.getData() != null ? req.getData() : Collections.emptyMap();
+
+        if (Boolean.TRUE.equals(data.get("migrated")) || Boolean.TRUE.equals(data.get("isMigrated"))) {
+            return true;
+        }
+        if (data.containsKey("excelData") && data.get("excelData") != null) {
+            return true;
+        }
+        if (id.startsWith("REQ-20") || id.startsWith("REQ-19") || id.startsWith("REQ-T") || id.startsWith("SRV-")) {
+            return true;
+        }
+        if (userId.startsWith("C-20") || userId.startsWith("C-19") || userId.startsWith("C-T")) {
+            return true;
+        }
+        if (data.containsKey("uen") && data.get("uen") != null && !data.get("uen").toString().trim().isEmpty() 
+                && !"N/A".equalsIgnoreCase(data.get("uen").toString().trim())) {
+            return true;
+        }
+        return false;
+    }
+
+    private String resolveApplicationDisplayId(Requirement req) {
+        if (req == null) return "APP-0001";
+
+        // 1. Check existing applicationReferenceNo (e.g. APP-0118, APP-0121)
+        if (req.getApplicationReferenceNo() != null && !req.getApplicationReferenceNo().trim().isEmpty() 
+                && req.getApplicationReferenceNo().trim().startsWith("APP-")) {
+            return req.getApplicationReferenceNo().trim();
+        }
+
+        // 2. Check within requirement data
+        if (req.getData() != null) {
+            Object ref = req.getData().get("applicationReferenceNo");
+            if (ref != null && !ref.toString().trim().isEmpty() && ref.toString().trim().startsWith("APP-")) {
+                return ref.toString().trim();
+            }
+            Object num = req.getData().get("applicationNumber");
+            if (num != null && !num.toString().trim().isEmpty()) {
+                String strNum = num.toString().trim();
+                return strNum.startsWith("APP-") ? strNum : ("APP-" + strNum);
+            }
+        }
+
+        String rawId = req.getId() != null ? req.getId().trim() : "";
+
+        // 3. If raw ID already starts with APP-
+        if (rawId.startsWith("APP-")) {
+            return rawId;
+        }
+
+        // 4. If raw ID starts with SRV- (e.g. SRV-1005 -> APP-1005)
+        if (rawId.startsWith("SRV-")) {
+            return rawId.replace("SRV-", "APP-");
+        }
+
+        // 5. If raw ID is 24-character hex MongoDB ObjectId (e.g. 6ac634684c46b09a7e1e1001)
+        if (rawId.matches("^[0-9a-fA-F]{24}$")) {
+            String last4 = rawId.substring(rawId.length() - 4);
+            if (last4.matches("^\\d{4}$")) {
+                return "APP-" + last4;
+            }
+            try {
+                long hexVal = Long.parseLong(last4, 16);
+                long appNum = (hexVal % 9000) + 1000;
+                return String.format("APP-%04d", appNum);
+            } catch (Exception e) {
+                return "APP-" + last4.toUpperCase();
+            }
+        }
+
+        // 6. If raw ID starts with REQ-
+        if (rawId.startsWith("REQ-")) {
+            return rawId.replace("REQ-", "APP-");
+        }
+
+        return rawId.isEmpty() ? ("APP-" + (System.currentTimeMillis() % 10000)) : ("APP-" + rawId);
     }
 
     // --- REPORT ENDPOINTS ---

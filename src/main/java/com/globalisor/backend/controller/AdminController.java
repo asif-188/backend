@@ -647,6 +647,16 @@ public class AdminController {
                 if (id.equalsIgnoreCase(r.getApplicationReferenceNo())) {
                     return Optional.of(r);
                 }
+                if (r.getData() != null) {
+                    Object ref = r.getData().get("applicationReferenceNo");
+                    if (ref != null && id.equalsIgnoreCase(ref.toString())) {
+                        return Optional.of(r);
+                    }
+                    Object num = r.getData().get("applicationNumber");
+                    if (num != null && (id.equalsIgnoreCase(num.toString()) || id.equalsIgnoreCase("APP-" + num.toString()))) {
+                        return Optional.of(r);
+                    }
+                }
             }
             req = requirementRepository.findById(id.replace("APP-", "SRV-"));
             if (req.isPresent()) return req;
