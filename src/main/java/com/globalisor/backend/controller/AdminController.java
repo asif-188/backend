@@ -1086,6 +1086,11 @@ public class AdminController {
         }
     }
 
+    @GetMapping({"/applications/compliancebox/status", "/admin/applications/compliancebox/status"})
+    public ResponseEntity<?> getComplianceBoxStatus() {
+        return ResponseEntity.ok(complianceBoxService.refreshBrowserToken());
+    }
+
     @PostMapping("/admin/applications/{id}/reject")
     public ResponseEntity<?> rejectApplication(@PathVariable String id, @RequestBody(required = false) Map<String, Object> body) {
         Optional<Requirement> reqOpt = findRequirementFlexible(id);

@@ -380,6 +380,33 @@ public class ComplianceBoxService {
             String respBody = httpResponse.body() != null ? httpResponse.body().trim() : "";
             logger.info("ComplianceBox API response status: {}, body: {}", statusCode, respBody);
 
+            if (statusCode == 401) {
+                logger.warn("ComplianceBox returned 401 Unauthorized. Attempting to fetch fresh token from active Chrome session...");
+                Map<String, Object> refreshRes = refreshBrowserToken();
+                if (Boolean.TRUE.equals(refreshRes.get("success")) && refreshRes.get("token") != null) {
+                    String newToken = refreshRes.get("token").toString().trim();
+                    if (!newToken.isEmpty() && !newToken.equals(token)) {
+                        logger.info("Found fresh token from browser. Retrying ComplianceBox sync...");
+                        HttpRequest retryRequest = HttpRequest.newBuilder()
+                                .uri(URI.create(complianceBoxApiUrl))
+                                .timeout(Duration.ofSeconds(20))
+                                .header("Content-Type", "application/json")
+                                .header("Accept", "application/json")
+                                .header("Origin", "https://app.compliancebox.co")
+                                .header("Referer", "https://app.compliancebox.co/")
+                                .header("token", newToken)
+                                .header("Access-Control-Allow-Origin", "https://app.compliancebox.co|https://api.compliancebox.co")
+                                .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36")
+                                .POST(HttpRequest.BodyPublishers.ofString(jsonPayload, StandardCharsets.UTF_8))
+                                .build();
+                        HttpResponse<String> retryResponse = client.send(retryRequest, HttpResponse.BodyHandlers.ofString());
+                        statusCode = retryResponse.statusCode();
+                        respBody = retryResponse.body() != null ? retryResponse.body().trim() : "";
+                        logger.info("Retry ComplianceBox API response status: {}, body: {}", statusCode, respBody);
+                    }
+                }
+            }
+
             if (statusCode >= 200 && statusCode < 300) {
                 response.put("success", true);
                 response.put("statusCode", statusCode);
@@ -401,7 +428,11 @@ public class ComplianceBoxService {
                 logger.error("ComplianceBox API error: status={}, body={}", statusCode, respBody);
                 response.put("success", false);
                 response.put("statusCode", statusCode);
-                response.put("error", "ComplianceBox API returned HTTP " + statusCode + (respBody.isEmpty() ? "" : ": " + respBody));
+                if (statusCode == 401) {
+                    response.put("error", "ComplianceBox session expired or invalid. Please open a tab, log into https://app.compliancebox.co, and click Sync again.");
+                } else {
+                    response.put("error", "ComplianceBox API returned HTTP " + statusCode + (respBody.isEmpty() ? "" : ": " + respBody));
+                }
                 return response;
             }
         } catch (Exception e) {
@@ -409,6 +440,43 @@ public class ComplianceBoxService {
             response.put("success", false);
             response.put("error", e.getMessage());
             return response;
+        }
+    }
+
+    public Map<String, Object> refreshBrowserToken() {
+        Map<String, Object> result = new HashMap<>();
+        try {
+            File script = new File("scripts/extract_compliancebox_token.js");
+            if (!script.exists()) {
+                script = new File("../scripts/extract_compliancebox_token.js");
+            }
+            if (!script.exists()) {
+                result.put("success", false);
+                result.put("error", "Extractor script not found: scripts/extract_compliancebox_token.js");
+                return result;
+            }
+
+            ProcessBuilder pb = new ProcessBuilder("node", script.getAbsolutePath());
+            pb.directory(script.getParentFile());
+            Process process = pb.start();
+            String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+            String errOutput = new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+            process.waitFor();
+
+            if (output.startsWith("{")) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> parsed = objectMapper.readValue(output, Map.class);
+                return parsed;
+            } else {
+                result.put("success", false);
+                result.put("error", !errOutput.isEmpty() ? errOutput : output);
+                return result;
+            }
+        } catch (Exception e) {
+            logger.error("Error refreshing token from browser: ", e);
+            result.put("success", false);
+            result.put("error", e.getMessage());
+            return result;
         }
     }
 
@@ -429,6 +497,13 @@ public class ComplianceBoxService {
                 Map<String, Object> map = objectMapper.readValue(tokenFile, Map.class);
                 if (map != null && map.containsKey("token") && map.get("token") != null) {
                     String t = map.get("token").toString().trim();
+                    if (!t.isEmpty()) return t;
+                }
+            } else {
+                // If token file not present, try quick check from active browser
+                Map<String, Object> browserRes = refreshBrowserToken();
+                if (Boolean.TRUE.equals(browserRes.get("success")) && browserRes.get("token") != null) {
+                    String t = browserRes.get("token").toString().trim();
                     if (!t.isEmpty()) return t;
                 }
             }

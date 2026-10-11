@@ -36,4 +36,20 @@ public class ComplianceBoxController {
             return ResponseEntity.badRequest().body(result);
         }
     }
+
+    @PostMapping("/refresh-token")
+    public ResponseEntity<?> refreshToken() {
+        Map<String, Object> result = complianceBoxService.refreshBrowserToken();
+        if (Boolean.TRUE.equals(result.get("success"))) {
+            return ResponseEntity.ok(result);
+        } else {
+            return ResponseEntity.badRequest().body(result);
+        }
+    }
+
+    @GetMapping("/status")
+    public ResponseEntity<?> getStatus() {
+        Map<String, Object> result = complianceBoxService.refreshBrowserToken();
+        return ResponseEntity.ok(result);
+    }
 }
