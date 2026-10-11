@@ -1370,7 +1370,7 @@ public class MigratedEndpointsController {
     // --- APPLICATION ENDPOINTS ---
     @GetMapping("/applications/counts")
     public ResponseEntity<Map<String, Long>> getApplicationCounts() {
-        List<Map<String, Object>> apps = getAllApplications(null, null, null, null, false).getBody();
+        List<Map<String, Object>> apps = getAllApplications(null, null, null, null, false, false).getBody();
         if (apps == null) apps = Collections.emptyList();
 
         long pending = 0;
@@ -1394,7 +1394,7 @@ public class MigratedEndpointsController {
     }
 
     public ResponseEntity<List<Map<String, Object>>> getAllApplications(String tab, String statusFilter, boolean includeAll) {
-        return getAllApplications(tab, statusFilter, null, null, includeAll);
+        return getAllApplications(tab, statusFilter, null, null, false, includeAll);
     }
 
     @GetMapping("/applications")
@@ -1403,6 +1403,7 @@ public class MigratedEndpointsController {
             @RequestParam(value = "status", required = false) String statusFilter,
             @RequestParam(value = "type", required = false) String typeFilter,
             @RequestParam(value = "queue", required = false) String queueFilter,
+            @RequestParam(value = "includeMigrated", defaultValue = "false") boolean includeMigrated,
             @RequestParam(value = "all", defaultValue = "false") boolean includeAll) {
         List<Requirement> activeRequirements = requirementRepository.findAllLightweight();
         List<Onboarding> activeOnboardings = onboardingRepository.findAllLightweight();
@@ -1624,7 +1625,8 @@ public class MigratedEndpointsController {
         }
 
         // 4. Incorporation / Migrated Filter from backend
-        if ("incorporation".equalsIgnoreCase(typeFilter) || "pickup".equalsIgnoreCase(queueFilter) || "available".equalsIgnoreCase(tab)) {
+        // Applications endpoint strictly returns actual incorporation applications, excluding migrated/existing clients, unless includeMigrated=true
+        if (!includeMigrated && !"migrated".equalsIgnoreCase(tab)) {
             apps = apps.stream()
                     .filter(a -> !Boolean.TRUE.equals(a.get("isMigrated")))
                     .collect(Collectors.toList());
