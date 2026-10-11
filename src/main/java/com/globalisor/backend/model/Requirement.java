@@ -33,6 +33,13 @@ public class Requirement {
     private Date updatedAt = new Date();
     private Map<String, Map<String, Object>> sectionStatuses = new HashMap<>();
     private Map<String, Object> data;
+    
+    // ComplianceBox Integration Fields
+    @Indexed
+    private Boolean complianceBoxSynced = false;
+    private String complianceBoxSyncedAt;
+    private String complianceBoxClientName;
+    private String complianceBoxContactPerson;
 
     public Requirement(String userId, Map<String, Object> data) {
         this.userId = userId;

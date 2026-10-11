@@ -16,8 +16,10 @@ public class ComplianceBoxController {
     private ComplianceBoxService complianceBoxService;
 
     @PostMapping("/sync/{id}")
-    public ResponseEntity<?> syncApplication(@PathVariable String id) {
-        Map<String, Object> result = complianceBoxService.syncApplication(id);
+    public ResponseEntity<?> syncApplication(
+            @PathVariable String id,
+            @RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> result = complianceBoxService.syncApplication(id, body);
         if (Boolean.TRUE.equals(result.get("success"))) {
             return ResponseEntity.ok(result);
         } else {

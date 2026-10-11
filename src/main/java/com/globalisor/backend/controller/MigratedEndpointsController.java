@@ -1480,9 +1480,19 @@ public class MigratedEndpointsController {
             map.put("applicationReferenceNo", displayAppId);
             map.put("rawId", req.getId());
             map.put("mongoId", req.getId());
-            map.put("complianceBoxSynced", req.getData() != null && Boolean.TRUE.equals(req.getData().get("complianceBoxSynced")));
-            map.put("complianceBoxSyncedAt", req.getData() != null ? req.getData().get("complianceBoxSyncedAt") : null);
-            map.put("data", sanitizeSummaryData(req.getData()));
+            boolean isCbSynced = Boolean.TRUE.equals(req.getComplianceBoxSynced()) || 
+                    (req.getData() != null && (Boolean.TRUE.equals(req.getData().get("complianceBoxSynced")) || "true".equalsIgnoreCase(String.valueOf(req.getData().get("complianceBoxSynced")))));
+            map.put("complianceBoxSynced", isCbSynced);
+            map.put("complianceBoxSyncedAt", req.getComplianceBoxSyncedAt() != null ? req.getComplianceBoxSyncedAt() : (req.getData() != null ? req.getData().get("complianceBoxSyncedAt") : null));
+            map.put("complianceBoxClientName", req.getComplianceBoxClientName() != null ? req.getComplianceBoxClientName() : (req.getData() != null ? req.getData().get("complianceBoxClientName") : null));
+            map.put("complianceBoxContactPerson", req.getComplianceBoxContactPerson() != null ? req.getComplianceBoxContactPerson() : (req.getData() != null ? req.getData().get("complianceBoxContactPerson") : null));
+            
+            Map<String, Object> sanitizedData = sanitizeSummaryData(req.getData());
+            sanitizedData.put("complianceBoxSynced", isCbSynced);
+            if (map.get("complianceBoxSyncedAt") != null) sanitizedData.put("complianceBoxSyncedAt", map.get("complianceBoxSyncedAt"));
+            if (map.get("complianceBoxClientName") != null) sanitizedData.put("complianceBoxClientName", map.get("complianceBoxClientName"));
+            if (map.get("complianceBoxContactPerson") != null) sanitizedData.put("complianceBoxContactPerson", map.get("complianceBoxContactPerson"));
+            map.put("data", sanitizedData);
 
             User user = uId != null ? userMap.get(uId) : null;
             map.put("business", extractCompanyName(req.getData(), user));

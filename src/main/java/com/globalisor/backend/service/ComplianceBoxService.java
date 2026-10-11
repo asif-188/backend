@@ -44,6 +44,10 @@ public class ComplianceBoxService {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public Map<String, Object> syncApplication(String applicationId) {
+        return syncApplication(applicationId, null);
+    }
+
+    public Map<String, Object> syncApplication(String applicationId, Map<String, Object> overrides) {
         Map<String, Object> response = new HashMap<>();
         try {
             Requirement req = findRequirementFlexible(applicationId);
@@ -61,63 +65,135 @@ public class ComplianceBoxService {
                 linkedUser = userRepository.findById(req.getUserId()).orElse(null);
             }
 
-            // Resolve company/client name
+            // 1. Resolve company/client name (Corporate Entity Name)
             String name = null;
-            if (data.containsKey("companyName") && data.get("companyName") != null && !data.get("companyName").toString().trim().isEmpty()) {
+            if (overrides != null && overrides.get("clientName") != null && !overrides.get("clientName").toString().trim().isEmpty()) {
+                name = overrides.get("clientName").toString().trim();
+            } else if (overrides != null && overrides.get("name") != null && !overrides.get("name").toString().trim().isEmpty()) {
+                name = overrides.get("name").toString().trim();
+            } else if (overrides != null && overrides.get("companyName") != null && !overrides.get("companyName").toString().trim().isEmpty()) {
+                name = overrides.get("companyName").toString().trim();
+            } else if (data.containsKey("companyName") && data.get("companyName") != null && !data.get("companyName").toString().trim().isEmpty()) {
                 name = data.get("companyName").toString().trim();
-            } else if (data.containsKey("proposedName1") && data.get("proposedName1") != null && !data.get("proposedName1").toString().trim().isEmpty()) {
-                name = data.get("proposedName1").toString().trim();
-            } else if (data.containsKey("proposedName") && data.get("proposedName") != null && !data.get("proposedName").toString().trim().isEmpty()) {
-                name = data.get("proposedName").toString().trim();
-            } else if (data.containsKey("clientName") && data.get("clientName") != null && !data.get("clientName").toString().trim().isEmpty()) {
-                name = data.get("clientName").toString().trim();
-            } else if (linkedUser != null && linkedUser.getCompanyName() != null && !linkedUser.getCompanyName().trim().isEmpty()) {
-                name = linkedUser.getCompanyName().trim();
-            } else if (linkedUser != null) {
-                String fullName = ((linkedUser.getFirstName() != null ? linkedUser.getFirstName() : "") + " " + 
-                                   (linkedUser.getLastName() != null ? linkedUser.getLastName() : "")).trim();
-                name = !fullName.isEmpty() ? fullName : "Client " + req.getId();
-            } else {
-                name = "Client Application " + req.getId();
+            } else if (data.containsKey("names") && data.get("names") != null) {
+                Object namesObj = data.get("names");
+                if (namesObj instanceof List && !((List<?>) namesObj).isEmpty()) {
+                    Object first = ((List<?>) namesObj).get(0);
+                    if (first != null && !first.toString().trim().isEmpty()) {
+                        name = first.toString().trim();
+                    }
+                } else if (!namesObj.toString().trim().isEmpty()) {
+                    name = namesObj.toString().trim();
+                }
             }
 
-            // Resolve contact person
+            if (name == null || name.isEmpty()) {
+                if (data.containsKey("proposedName1") && data.get("proposedName1") != null && !data.get("proposedName1").toString().trim().isEmpty()) {
+                    name = data.get("proposedName1").toString().trim();
+                } else if (data.containsKey("proposedName") && data.get("proposedName") != null && !data.get("proposedName").toString().trim().isEmpty()) {
+                    name = data.get("proposedName").toString().trim();
+                } else if (data.containsKey("business") && data.get("business") != null && !data.get("business").toString().trim().isEmpty()) {
+                    name = data.get("business").toString().trim();
+                } else if (data.containsKey("clientName") && data.get("clientName") != null && !data.get("clientName").toString().trim().isEmpty()) {
+                    name = data.get("clientName").toString().trim();
+                } else if (linkedUser != null && linkedUser.getCompanyName() != null && !linkedUser.getCompanyName().trim().isEmpty()) {
+                    name = linkedUser.getCompanyName().trim();
+                } else if (linkedUser != null) {
+                    String fullName = ((linkedUser.getFirstName() != null ? linkedUser.getFirstName() : "") + " " + 
+                                       (linkedUser.getLastName() != null ? linkedUser.getLastName() : "")).trim();
+                    name = !fullName.isEmpty() ? fullName : "Client " + req.getId();
+                } else {
+                    name = "Client Application " + req.getId();
+                }
+            }
+
+            // 2. Resolve Contact Person (Individual Representative / Director / Key Officer)
             String contactPerson = null;
-            if (data.containsKey("contactPerson") && data.get("contactPerson") != null && !data.get("contactPerson").toString().trim().isEmpty()) {
+            if (overrides != null && overrides.get("contactPerson") != null && !overrides.get("contactPerson").toString().trim().isEmpty()) {
+                contactPerson = overrides.get("contactPerson").toString().trim();
+            } else if (data.containsKey("contactPerson") && data.get("contactPerson") != null && !data.get("contactPerson").toString().trim().isEmpty()) {
                 contactPerson = data.get("contactPerson").toString().trim();
-            } else if (data.containsKey("applicantName") && data.get("applicantName") != null && !data.get("applicantName").toString().trim().isEmpty()) {
-                contactPerson = data.get("applicantName").toString().trim();
-            } else if (data.containsKey("fullName") && data.get("fullName") != null && !data.get("fullName").toString().trim().isEmpty()) {
-                contactPerson = data.get("fullName").toString().trim();
-            } else if (linkedUser != null) {
-                String fullName = ((linkedUser.getFirstName() != null ? linkedUser.getFirstName() : "") + " " + 
-                                   (linkedUser.getLastName() != null ? linkedUser.getLastName() : "")).trim();
-                if (!fullName.isEmpty()) contactPerson = fullName;
+            } else if (data.containsKey("contact") && data.get("contact") instanceof Map) {
+                Map<?, ?> contactMap = (Map<?, ?>) data.get("contact");
+                String fn = contactMap.get("firstName") != null ? contactMap.get("firstName").toString().trim() : "";
+                String ln = contactMap.get("lastName") != null ? contactMap.get("lastName").toString().trim() : "";
+                String full = (fn + " " + ln).trim();
+                if (!full.isEmpty()) contactPerson = full;
             }
 
-            // Resolve email
+            if (contactPerson == null || contactPerson.isEmpty()) {
+                if (data.containsKey("applicantName") && data.get("applicantName") != null && !data.get("applicantName").toString().trim().isEmpty()) {
+                    contactPerson = data.get("applicantName").toString().trim();
+                } else if (data.containsKey("fullName") && data.get("fullName") != null && !data.get("fullName").toString().trim().isEmpty()) {
+                    contactPerson = data.get("fullName").toString().trim();
+                } else if (data.containsKey("directors") && data.get("directors") instanceof List && !((List<?>) data.get("directors")).isEmpty()) {
+                    Object firstDir = ((List<?>) data.get("directors")).get(0);
+                    if (firstDir instanceof Map) {
+                        Map<?, ?> dirMap = (Map<?, ?>) firstDir;
+                        if (dirMap.get("name") != null && !dirMap.get("name").toString().trim().isEmpty()) {
+                            contactPerson = dirMap.get("name").toString().trim();
+                        } else if (dirMap.get("fullName") != null && !dirMap.get("fullName").toString().trim().isEmpty()) {
+                            contactPerson = dirMap.get("fullName").toString().trim();
+                        }
+                    }
+                } else if (linkedUser != null) {
+                    String fullName = ((linkedUser.getFirstName() != null ? linkedUser.getFirstName() : "") + " " + 
+                                       (linkedUser.getLastName() != null ? linkedUser.getLastName() : "")).trim();
+                    if (!fullName.isEmpty()) contactPerson = fullName;
+                }
+            }
+            if (contactPerson == null || contactPerson.isEmpty()) {
+                contactPerson = name;
+            }
+
+            // 3. Resolve Email
             String email = null;
-            if (data.containsKey("email") && data.get("email") != null && !data.get("email").toString().trim().isEmpty()) {
-                email = data.get("email").toString().trim();
-            } else if (data.containsKey("applicantEmail") && data.get("applicantEmail") != null && !data.get("applicantEmail").toString().trim().isEmpty()) {
-                email = data.get("applicantEmail").toString().trim();
-            } else if (linkedUser != null && linkedUser.getEmail() != null) {
-                email = linkedUser.getEmail();
+            if (overrides != null && overrides.get("email") != null && !overrides.get("email").toString().trim().isEmpty()) {
+                email = overrides.get("email").toString().trim();
+            } else if (data.containsKey("contact") && data.get("contact") instanceof Map) {
+                Map<?, ?> contactMap = (Map<?, ?>) data.get("contact");
+                if (contactMap.get("email") != null && !contactMap.get("email").toString().trim().isEmpty()) {
+                    email = contactMap.get("email").toString().trim();
+                }
             }
+            if (email == null || email.isEmpty()) {
+                if (data.containsKey("email") && data.get("email") != null && !data.get("email").toString().trim().isEmpty()) {
+                    email = data.get("email").toString().trim();
+                } else if (data.containsKey("applicantEmail") && data.get("applicantEmail") != null && !data.get("applicantEmail").toString().trim().isEmpty()) {
+                    email = data.get("applicantEmail").toString().trim();
+                } else if (linkedUser != null && linkedUser.getEmail() != null) {
+                    email = linkedUser.getEmail();
+                }
+            }
+            if (email == null) email = "";
 
-            // Resolve phone
+            // 4. Resolve Phone
             String phone = null;
-            if (data.containsKey("phone") && data.get("phone") != null && !data.get("phone").toString().trim().isEmpty()) {
-                phone = data.get("phone").toString().trim();
-            } else if (data.containsKey("applicantPhone") && data.get("applicantPhone") != null && !data.get("applicantPhone").toString().trim().isEmpty()) {
-                phone = data.get("applicantPhone").toString().trim();
-            } else if (linkedUser != null && linkedUser.getPhone() != null) {
-                phone = linkedUser.getPhone();
+            if (overrides != null && overrides.get("phone") != null && !overrides.get("phone").toString().trim().isEmpty()) {
+                phone = overrides.get("phone").toString().trim();
+            } else if (data.containsKey("contact") && data.get("contact") instanceof Map) {
+                Map<?, ?> contactMap = (Map<?, ?>) data.get("contact");
+                if (contactMap.get("phone") != null && !contactMap.get("phone").toString().trim().isEmpty()) {
+                    String cc = contactMap.get("countryCode") != null ? contactMap.get("countryCode").toString().trim() : "";
+                    phone = (cc + " " + contactMap.get("phone").toString().trim()).trim();
+                }
             }
+            if (phone == null || phone.isEmpty()) {
+                if (data.containsKey("phone") && data.get("phone") != null && !data.get("phone").toString().trim().isEmpty()) {
+                    phone = data.get("phone").toString().trim();
+                } else if (data.containsKey("applicantPhone") && data.get("applicantPhone") != null && !data.get("applicantPhone").toString().trim().isEmpty()) {
+                    phone = data.get("applicantPhone").toString().trim();
+                } else if (linkedUser != null && linkedUser.getPhone() != null) {
+                    phone = linkedUser.getPhone();
+                }
+            }
+            if (phone == null) phone = "";
 
-            // Resolve country
+            // 5. Resolve Country
             String country = "Singapore";
-            if (data.containsKey("country") && data.get("country") != null && !data.get("country").toString().trim().isEmpty()) {
+            if (overrides != null && overrides.get("country") != null && !overrides.get("country").toString().trim().isEmpty()) {
+                country = overrides.get("country").toString().trim();
+            } else if (data.containsKey("country") && data.get("country") != null && !data.get("country").toString().trim().isEmpty()) {
                 country = data.get("country").toString().trim();
             } else if (data.containsKey("incorporationCountry") && data.get("incorporationCountry") != null && !data.get("incorporationCountry").toString().trim().isEmpty()) {
                 country = data.get("incorporationCountry").toString().trim();
@@ -125,9 +201,44 @@ public class ComplianceBoxService {
                 country = data.get("nationality").toString().trim();
             }
 
-            if (contactPerson == null || contactPerson.isEmpty()) contactPerson = name;
-            if (email == null) email = "";
-            if (phone == null) phone = "";
+            // 6. Resolve Registered Address
+            String registeredAddress = "";
+            if (overrides != null && overrides.get("registeredAddress") != null && !overrides.get("registeredAddress").toString().trim().isEmpty()) {
+                registeredAddress = overrides.get("registeredAddress").toString().trim();
+            } else if (data.containsKey("registeredAddress") && data.get("registeredAddress") != null && !data.get("registeredAddress").toString().trim().isEmpty()) {
+                registeredAddress = data.get("registeredAddress").toString().trim();
+            } else if (data.containsKey("address") && data.get("address") != null) {
+                Object addrObj = data.get("address");
+                if (addrObj instanceof Map) {
+                    Map<?, ?> addrMap = (Map<?, ?>) addrObj;
+                    registeredAddress = ((addrMap.get("street") != null ? addrMap.get("street") : "") + " " +
+                                         (addrMap.get("postalCode") != null ? addrMap.get("postalCode") : "")).trim();
+                } else {
+                    registeredAddress = addrObj.toString().trim();
+                }
+            }
+
+            // 7. Resolve Nature of Business / Industry
+            String natureOfBusiness = "";
+            if (overrides != null && overrides.get("natureOfBusiness") != null && !overrides.get("natureOfBusiness").toString().trim().isEmpty()) {
+                natureOfBusiness = overrides.get("natureOfBusiness").toString().trim();
+            } else if (data.containsKey("customPrimaryActivity") && data.get("customPrimaryActivity") != null && !data.get("customPrimaryActivity").toString().trim().isEmpty()) {
+                natureOfBusiness = data.get("customPrimaryActivity").toString().trim();
+            } else if (data.containsKey("primarySsic") && data.get("primarySsic") instanceof Map) {
+                Map<?, ?> ssicMap = (Map<?, ?>) data.get("primarySsic");
+                natureOfBusiness = (ssicMap.get("name") != null ? ssicMap.get("name") : ssicMap.get("description") != null ? ssicMap.get("description") : "").toString().trim();
+            } else if (data.containsKey("natureOfBusiness") && data.get("natureOfBusiness") != null && !data.get("natureOfBusiness").toString().trim().isEmpty()) {
+                natureOfBusiness = data.get("natureOfBusiness").toString().trim();
+            }
+
+            String industry = "";
+            if (overrides != null && overrides.get("industry") != null && !overrides.get("industry").toString().trim().isEmpty()) {
+                industry = overrides.get("industry").toString().trim();
+            } else if (data.containsKey("industry") && data.get("industry") != null && !data.get("industry").toString().trim().isEmpty()) {
+                industry = data.get("industry").toString().trim();
+            } else {
+                industry = natureOfBusiness;
+            }
 
             Map<String, Object> payload = new HashMap<>();
             payload.put("name", name);
@@ -135,14 +246,23 @@ public class ComplianceBoxService {
             payload.put("email", email);
             payload.put("phone", phone);
             payload.put("country", country);
+            payload.put("registeredAddress", registeredAddress);
+            payload.put("natureOfBusiness", natureOfBusiness);
+            payload.put("industry", industry);
 
             // Execute sync runner
             Map<String, Object> syncResult = executeSyncRunner(payload);
 
             if (Boolean.TRUE.equals(syncResult.get("success"))) {
-                // Update requirement with sync status
+                String syncedTimestamp = new Date().toString();
+                // Update requirement top-level and data map with sync status
+                req.setComplianceBoxSynced(true);
+                req.setComplianceBoxSyncedAt(syncedTimestamp);
+                req.setComplianceBoxClientName(name);
+                req.setComplianceBoxContactPerson(contactPerson);
+
                 data.put("complianceBoxSynced", true);
-                data.put("complianceBoxSyncedAt", new Date().toString());
+                data.put("complianceBoxSyncedAt", syncedTimestamp);
                 data.put("complianceBoxClientName", name);
                 data.put("complianceBoxContactPerson", contactPerson);
                 req.setData(data);
@@ -150,13 +270,14 @@ public class ComplianceBoxService {
                 requirementRepository.save(req);
 
                 response.put("success", true);
+                response.put("complianceBoxSynced", true);
                 response.put("message", "Client successfully synced to ComplianceBox");
                 response.put("clientName", name);
                 response.put("contactPerson", contactPerson);
                 response.put("email", email);
                 response.put("phone", phone);
                 response.put("country", country);
-                response.put("syncedAt", new Date().toString());
+                response.put("syncedAt", syncedTimestamp);
             } else {
                 response.put("success", false);
                 response.put("error", syncResult.getOrDefault("error", "ComplianceBox sync failed"));
@@ -201,6 +322,9 @@ public class ComplianceBoxService {
             String email = payload.get("email") != null ? payload.get("email").toString().trim() : "";
             String phone = payload.get("phone") != null ? payload.get("phone").toString().trim() : "";
             String country = payload.get("country") != null ? payload.get("country").toString().trim() : "Singapore";
+            String registeredAddress = payload.get("registeredAddress") != null ? payload.get("registeredAddress").toString().trim() : "";
+            String natureOfBusiness = payload.get("natureOfBusiness") != null ? payload.get("natureOfBusiness").toString().trim() : "";
+            String industry = payload.get("industry") != null ? payload.get("industry").toString().trim() : "";
 
             String token = resolveToken();
             String companyId = resolveCompanyId();
@@ -213,6 +337,19 @@ public class ComplianceBoxService {
             requestBodyMap.put("email", email);
             requestBodyMap.put("phone", phone);
             requestBodyMap.put("country", country);
+            if (!country.isEmpty()) {
+                requestBodyMap.put("countryOfIncorporation", country);
+            }
+            if (!registeredAddress.isEmpty()) {
+                requestBodyMap.put("registeredAddress", registeredAddress);
+                requestBodyMap.put("address", registeredAddress);
+            }
+            if (!natureOfBusiness.isEmpty()) {
+                requestBodyMap.put("natureOfBusiness", natureOfBusiness);
+            }
+            if (!industry.isEmpty()) {
+                requestBodyMap.put("industry", industry);
+            }
             requestBodyMap.put("servicesSought", Collections.emptyList());
             requestBodyMap.put("access", Collections.emptyList());
             requestBodyMap.put("companyId", companyId);
