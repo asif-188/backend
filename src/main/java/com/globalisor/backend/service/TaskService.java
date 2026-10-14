@@ -181,7 +181,22 @@ public class TaskService {
             if (days != null && days > 0) {
                 String st = task.getStatus() != null ? task.getStatus().toUpperCase() : "";
                 if ("COMPLETED".equals(st) || "RESOLVED".equals(st) || "LODGED".equals(st) || "CANCELLED".equals(st) || "CLOSED".equals(st)) {
-                    Long taskTime = task.getUpdatedAt() != null ? task.getUpdatedAt() : task.getCreatedAt();
+                    Long taskTime = task.getResolvedAt();
+                    if (taskTime == null && task.getActivityLog() != null) {
+                        for (int i = task.getActivityLog().size() - 1; i >= 0; i--) {
+                            Task.ActivityLog log = task.getActivityLog().get(i);
+                            if (log != null && log.getTimestamp() != null && "STATUS_CHANGED".equalsIgnoreCase(log.getAction())) {
+                                String details = log.getDetails() != null ? log.getDetails().toUpperCase() : "";
+                                if (details.contains("COMPLETED") || details.contains("LODGED") || details.contains("RESOLVED") || details.contains("CANCELLED")) {
+                                    taskTime = log.getTimestamp();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (taskTime == null) {
+                        taskTime = task.getCreatedAt();
+                    }
                     if (taskTime != null && taskTime < cutoff) {
                         return false;
                     }
@@ -452,8 +467,10 @@ public class TaskService {
         // 2. Update Status if specified
         if (newStatus != null && !newStatus.trim().isEmpty()) {
             task.setStatus(newStatus.trim());
-            if ("COMPLETED".equalsIgnoreCase(newStatus) || "RESOLVED".equalsIgnoreCase(newStatus)) {
-                task.setResolvedAt(now);
+            if ("COMPLETED".equalsIgnoreCase(newStatus) || "RESOLVED".equalsIgnoreCase(newStatus) || "LODGED".equalsIgnoreCase(newStatus) || "CANCELLED".equalsIgnoreCase(newStatus) || "CLOSED".equalsIgnoreCase(newStatus)) {
+                if (task.getResolvedAt() == null) {
+                    task.setResolvedAt(now);
+                }
             }
         } else if ("PENDING".equalsIgnoreCase(task.getStatus())) {
             task.setStatus("IN_PROGRESS");
@@ -562,7 +579,7 @@ public class TaskService {
         task.setStatus(newStatus);
         task.setUpdatedAt(now);
 
-        if ("COMPLETED".equalsIgnoreCase(newStatus) || "RESOLVED".equalsIgnoreCase(newStatus)) {
+        if ("COMPLETED".equalsIgnoreCase(newStatus) || "RESOLVED".equalsIgnoreCase(newStatus) || "LODGED".equalsIgnoreCase(newStatus) || "CANCELLED".equalsIgnoreCase(newStatus) || "CLOSED".equalsIgnoreCase(newStatus)) {
             task.setResolvedAt(now);
             if (resolutionNotes != null && !resolutionNotes.isEmpty()) {
                 task.setResolutionNotes(resolutionNotes);
@@ -680,7 +697,7 @@ public class TaskService {
         long assigned = taskRepository.countByStatusIgnoreCase("ASSIGNED");
         long inProgress = taskRepository.countByStatusIgnoreCase("IN_PROGRESS");
         long waitingClient = taskRepository.countByStatusIgnoreCase("WAITING_CLIENT_INPUT");
-        long completed = taskRepository.countByStatusInIgnoreCase(List.of("COMPLETED", "RESOLVED"));
+        long completed = taskRepository.countByStatusInIgnoreCase(List.of("COMPLETED", "RESOLVED", "LODGED"));
         long urgent = taskRepository.countByStatusIgnoreCase("URGENT");
         long unassigned = taskRepository.countByAssignedToIsNull();
 
