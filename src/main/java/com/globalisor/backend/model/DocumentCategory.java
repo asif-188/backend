@@ -1,16 +1,12 @@
 package com.globalisor.backend.model;
 
-import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
-import lombok.NoArgsConstructor;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 @Data
 @Builder
-@NoArgsConstructor
-@AllArgsConstructor
 @Document(collection = "document_categories")
 public class DocumentCategory {
     @Id
@@ -36,4 +32,27 @@ public class DocumentCategory {
     private String scope = "COMMON";
     private String clientId;
     private String clientName;
+
+    public DocumentCategory() {
+    }
+
+    public DocumentCategory(String id, String key, String label, String description, String icon, String color, Integer sortOrder, Boolean isSystem, String parentKey, String parentId, String rootKey, Integer level, String fullPath, java.util.List<String> subFolders, String scope, String clientId, String clientName) {
+        this.id = id;
+        this.key = key;
+        this.label = label;
+        this.description = description;
+        this.icon = icon;
+        this.color = color;
+        this.sortOrder = sortOrder;
+        this.isSystem = isSystem;
+        this.parentKey = parentKey;
+        this.parentId = parentId;
+        this.rootKey = rootKey;
+        this.level = level;
+        this.fullPath = fullPath;
+        this.subFolders = subFolders;
+        this.scope = scope;
+        this.clientId = clientId;
+        this.clientName = clientName;
+    }
 }

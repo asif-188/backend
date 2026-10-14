@@ -1,6 +1,5 @@
 package com.globalisor.backend.model;
 
-import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.springframework.data.annotation.Id;
@@ -12,7 +11,6 @@ import java.util.List;
 
 @Data
 @NoArgsConstructor
-@AllArgsConstructor
 @Document(collection = "bi_chat_threads")
 public class ChatThread {
 
@@ -28,7 +26,6 @@ public class ChatThread {
 
     @Data
     @NoArgsConstructor
-    @AllArgsConstructor
     public static class ChatMessage {
         private String id;
         private String sender; // "user" or "assistant"

@@ -86,7 +86,7 @@ public class WebSecurityConfig {
                         .requestMatchers("/api/compliance-events", "/api/compliance-events/**").permitAll()
                         .requestMatchers("/api/documents/**").permitAll()
                         .requestMatchers("/api/notifications/**").permitAll()
-                        .requestMatchers("/api/messages/**", "/api/ws/**").permitAll()
+                        .requestMatchers("/api/messages", "/api/messages/**", "/api/ws/**").permitAll()
                         .requestMatchers("/api/reports/**").permitAll()
                         .requestMatchers("/api/catalog/**").permitAll()
                         .requestMatchers("/api/prereg-sections", "/api/prereg-sections/**").permitAll()
