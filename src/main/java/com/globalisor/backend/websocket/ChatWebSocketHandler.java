@@ -13,6 +13,8 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -46,10 +48,10 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
     private User resolveUser(String userId, String email) {
         if (userId != null && !userId.trim().isEmpty()) {
-            Optional<User> uOpt = userRepository.findById(userId);
+            Optional<User> uOpt = userRepository.findById(userId.trim());
             if (uOpt.isPresent()) return uOpt.get();
         }
-        String searchEmail = (email != null && !email.trim().isEmpty()) ? email : (userId != null && userId.contains("@") ? userId : null);
+        String searchEmail = (email != null && !email.trim().isEmpty()) ? email.trim() : (userId != null && userId.contains("@") ? userId.trim() : null);
         if (searchEmail != null) {
             String normSearch = searchEmail.toLowerCase().trim();
             for (User u : userRepository.findAll()) {
@@ -88,19 +90,58 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     public boolean isUserOnline(String identifier) {
         if (identifier == null || identifier.trim().isEmpty()) return false;
         String idKey = identifier.trim();
-        CopyOnWriteArrayList<String> active = userSessions.get(idKey);
-        if (active != null && !active.isEmpty()) return true;
-        active = userSessions.get(idKey.toLowerCase());
-        return active != null && !active.isEmpty();
+        if (hasAnyOpenSession(idKey) || hasAnyOpenSession(idKey.toLowerCase())) return true;
+        User u = resolveUser(idKey, null);
+        if (u != null) {
+            if (u.getId() != null) {
+                if (hasAnyOpenSession(u.getId()) || hasAnyOpenSession(u.getId().toLowerCase())) return true;
+            }
+            if (u.getEmail() != null) {
+                if (hasAnyOpenSession(u.getEmail().toLowerCase().trim())) return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasAnyOpenSession(String key) {
+        if (key == null) return false;
+        CopyOnWriteArrayList<String> sessionIds = userSessions.get(key.trim());
+        if (sessionIds == null || sessionIds.isEmpty()) return false;
+        boolean hasOpen = false;
+        for (String sId : sessionIds) {
+            WebSocketSession ws = sessions.get(sId);
+            if (ws != null && ws.isOpen()) {
+                hasOpen = true;
+            } else {
+                sessionIds.remove(sId);
+            }
+        }
+        if (sessionIds.isEmpty()) {
+            userSessions.remove(key.trim());
+        }
+        return hasOpen;
     }
 
     public String getUserStatus(String identifier) {
         if (identifier == null || identifier.trim().isEmpty()) return "offline";
+        if (!isUserOnline(identifier)) return "offline";
         String idKey = identifier.trim();
         String st = userPresenceStatus.get(idKey);
         if (st != null && !"offline".equalsIgnoreCase(st)) return st;
         st = userPresenceStatus.get(idKey.toLowerCase());
-        return st != null ? st : "offline";
+        if (st != null && !"offline".equalsIgnoreCase(st)) return st;
+        User u = resolveUser(idKey, null);
+        if (u != null) {
+            if (u.getId() != null) {
+                st = userPresenceStatus.get(u.getId());
+                if (st != null && !"offline".equalsIgnoreCase(st)) return st;
+            }
+            if (u.getEmail() != null) {
+                st = userPresenceStatus.get(u.getEmail().toLowerCase().trim());
+                if (st != null && !"offline".equalsIgnoreCase(st)) return st;
+            }
+        }
+        return "online";
     }
 
     public void setUserStatus(String userId, String status) {
@@ -143,6 +184,9 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                 String userId = getQueryParam(query, "userId");
                 String role = getQueryParam(query, "role");
                 String email = getQueryParam(query, "email");
+                if ((userId == null || userId.trim().isEmpty()) && email != null && !email.trim().isEmpty()) {
+                    userId = email.trim();
+                }
                 if (userId != null && !userId.trim().isEmpty()) {
                     session.getAttributes().put("userId", userId);
                     if (role != null) session.getAttributes().put("role", role);
@@ -164,13 +208,25 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
                     // Register session across all aliases
                     registerSessionKey(userId, session.getId());
-                    if (realId != null && !realId.equals(userId)) registerSessionKey(realId, session.getId());
-                    if (realEmail != null) registerSessionKey(realEmail.toLowerCase().trim(), session.getId());
-                    if (email != null && !email.equalsIgnoreCase(realEmail)) registerSessionKey(email.toLowerCase().trim(), session.getId());
+                    registerSessionKey(userId.toLowerCase(), session.getId());
+                    if (realId != null) {
+                        registerSessionKey(realId, session.getId());
+                        registerSessionKey(realId.toLowerCase(), session.getId());
+                    }
+                    if (realEmail != null) {
+                        registerSessionKey(realEmail.toLowerCase().trim(), session.getId());
+                    }
+                    if (email != null) {
+                        registerSessionKey(email.toLowerCase().trim(), session.getId());
+                    }
 
                     // Mark online in presence status
                     userPresenceStatus.put(userId, "online");
-                    if (realId != null) userPresenceStatus.put(realId, "online");
+                    userPresenceStatus.put(userId.toLowerCase(), "online");
+                    if (realId != null) {
+                        userPresenceStatus.put(realId, "online");
+                        userPresenceStatus.put(realId.toLowerCase(), "online");
+                    }
                     if (realEmail != null) userPresenceStatus.put(realEmail.toLowerCase().trim(), "online");
                     if (email != null) userPresenceStatus.put(email.toLowerCase().trim(), "online");
 
@@ -186,7 +242,15 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                     try {
                         Map<String, Object> snapshot = new ConcurrentHashMap<>();
                         snapshot.put("type", "presence_snapshot");
-                        snapshot.put("statuses", userPresenceStatus);
+                        Map<String, String> activeStatuses = new ConcurrentHashMap<>();
+                        for (Map.Entry<String, String> entry : userPresenceStatus.entrySet()) {
+                            if (isUserOnline(entry.getKey())) {
+                                activeStatuses.put(entry.getKey(), entry.getValue());
+                            } else {
+                                activeStatuses.put(entry.getKey(), "offline");
+                            }
+                        }
+                        snapshot.put("statuses", activeStatuses);
                         session.sendMessage(new TextMessage(objectMapper.writeValueAsString(snapshot)));
                     } catch (Exception ignored) {}
 
@@ -224,8 +288,14 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         String realEmail = (String) session.getAttributes().get("realEmail");
         String email = (String) session.getAttributes().get("email");
 
-        if (userId != null) unregisterSessionKey(userId, session.getId());
-        if (realId != null) unregisterSessionKey(realId, session.getId());
+        if (userId != null) {
+            unregisterSessionKey(userId, session.getId());
+            unregisterSessionKey(userId.toLowerCase(), session.getId());
+        }
+        if (realId != null) {
+            unregisterSessionKey(realId, session.getId());
+            unregisterSessionKey(realId.toLowerCase(), session.getId());
+        }
         if (realEmail != null) unregisterSessionKey(realEmail.toLowerCase().trim(), session.getId());
         if (email != null) unregisterSessionKey(email.toLowerCase().trim(), session.getId());
 
@@ -233,7 +303,9 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         if (!anyActive) {
             Long lastSeen = System.currentTimeMillis();
             if (userId != null) userPresenceStatus.put(userId, "offline");
+            if (userId != null) userPresenceStatus.put(userId.toLowerCase(), "offline");
             if (realId != null) userPresenceStatus.put(realId, "offline");
+            if (realId != null) userPresenceStatus.put(realId.toLowerCase(), "offline");
             if (realEmail != null) userPresenceStatus.put(realEmail.toLowerCase().trim(), "offline");
             if (email != null) userPresenceStatus.put(email.toLowerCase().trim(), "offline");
 
@@ -462,10 +534,15 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     }
 
     private String getQueryParam(String query, String name) {
+        if (query == null) return null;
         for (String param : query.split("&")) {
-            String[] entry = param.split("=");
+            String[] entry = param.split("=", 2);
             if (entry.length > 1 && entry[0].equals(name)) {
-                return entry[1];
+                try {
+                    return URLDecoder.decode(entry[1], StandardCharsets.UTF_8.name());
+                } catch (Exception e) {
+                    return entry[1];
+                }
             }
         }
         return null;

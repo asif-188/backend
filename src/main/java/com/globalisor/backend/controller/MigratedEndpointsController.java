@@ -1131,24 +1131,16 @@ public class MigratedEndpointsController {
         if (clientId != null && !clientId.trim().isEmpty()) {
             list.addAll(messageRepository.findByClientId(clientId));
 
-            // If clientId is a direct client ID, also include messages from 1-on-1 chats involving this client
-            if (!clientId.startsWith("team_chat_") && !clientId.startsWith("group-") && !clientId.startsWith("team_group_")) {
-                List<Message> all = messageRepository.findAll();
-                for (Message m : all) {
-                    if (m.getClientId() != null && (m.getClientId().startsWith("team_chat_") || m.getClientId().startsWith("chat_"))) {
-                        if (m.getClientId().contains(clientId)) {
-                            list.add(m);
-                        }
-                    }
-                }
-            } else if (clientId.startsWith("team_chat_")) {
-                // If it's a team chat between client and staff (e.g. team_chat_C-1001_staff-sarah),
-                // also include direct messages under the client's direct ID
+            if (clientId.startsWith("team_chat_")) {
                 String remainder = clientId.substring("team_chat_".length());
                 String[] parts = remainder.split("_");
                 if (parts.length >= 2) {
                     String p1 = parts[0];
-                    String p2 = parts[parts.length - 1];
+                    String p2 = parts[1];
+                    String rev = "team_chat_" + p2 + "_" + p1;
+                    if (!rev.equals(clientId)) {
+                        list.addAll(messageRepository.findByClientId(rev));
+                    }
                     for (Message m : messageRepository.findByClientId(p1)) {
                         if ((p1.equals(m.getSenderId()) && p2.equals(m.getClientId())) ||
                             (p2.equals(m.getSenderId()) && p1.equals(m.getClientId()))) {
@@ -1158,6 +1150,16 @@ public class MigratedEndpointsController {
                     for (Message m : messageRepository.findByClientId(p2)) {
                         if ((p1.equals(m.getSenderId()) && p2.equals(m.getClientId())) ||
                             (p2.equals(m.getSenderId()) && p1.equals(m.getClientId()))) {
+                            list.add(m);
+                        }
+                    }
+                }
+            } else if (!clientId.startsWith("group-") && !clientId.startsWith("team_group_")) {
+                // If clientId is a direct client ID, also include messages from 1-on-1 chats involving this client
+                List<Message> all = messageRepository.findAll();
+                for (Message m : all) {
+                    if (m.getClientId() != null && (m.getClientId().startsWith("team_chat_") || m.getClientId().startsWith("chat_"))) {
+                        if (m.getClientId().contains(clientId)) {
                             list.add(m);
                         }
                     }
@@ -1190,6 +1192,14 @@ public class MigratedEndpointsController {
         }
         if (message.getIsRead() == null) {
             message.setIsRead(false);
+        }
+        // Canonicalize team_chat clientId so sorting is always uniform
+        if (message.getClientId() != null && message.getClientId().startsWith("team_chat_")) {
+            String remainder = message.getClientId().substring("team_chat_".length());
+            String[] parts = remainder.split("_");
+            if (parts.length == 2 && parts[0].compareTo(parts[1]) > 0) {
+                message.setClientId("team_chat_" + parts[1] + "_" + parts[0]);
+            }
         }
         Message saved = messageRepository.save(message);
         chatWebSocketHandler.broadcastMessageNotification(saved);
@@ -1428,6 +1438,9 @@ public class MigratedEndpointsController {
             res.put("isOnline", online && !"offline".equals(status));
             res.put("status", status);
             Optional<User> uOpt = userRepository.findById(userId);
+            if (uOpt.isEmpty() && userId.contains("@")) {
+                uOpt = userRepository.findByEmailIgnoreCase(userId);
+            }
             uOpt.ifPresent(user -> res.put("lastSeen", user.getLastSeenTime()));
             res.put("userId", userId);
         } else if (name != null && !name.isEmpty()) {

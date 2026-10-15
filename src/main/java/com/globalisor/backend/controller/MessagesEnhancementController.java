@@ -302,16 +302,11 @@ public class MessagesEnhancementController {
                     status = stEmail;
                 }
             }
-            if (!online && "ONLINE".equalsIgnoreCase(u.getOnlineStatus())) {
-                if (u.getLastSeenTime() != null && System.currentTimeMillis() - u.getLastSeenTime() < 300000) {
-                    online = true;
-                }
-            }
-            if ("offline".equalsIgnoreCase(status) && !chatWebSocketHandler.isUserOnline(u.getId()) && (email == null || !chatWebSocketHandler.isUserOnline(email.toLowerCase().trim()))) {
-                online = false;
+            if (!online) {
+                status = "offline";
             }
             map.put("isOnline", online && !"offline".equalsIgnoreCase(status));
-            map.put("status", status != null && !"offline".equals(status) ? status : (online ? "online" : "offline"));
+            map.put("status", status != null ? status : (online ? "online" : "offline"));
             map.put("lastSeen", u.getLastSeenTime());
             userList.add(map);
         }
