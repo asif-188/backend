@@ -72,6 +72,9 @@ public class MigratedEndpointsController {
     @Autowired
     OnboardingRepository onboardingRepository;
 
+    @Autowired(required = false)
+    private com.globalisor.backend.security.EncryptionUtils encryptionUtils;
+
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
     // --- BLOG ENDPOINTS ---
@@ -1239,26 +1242,35 @@ public class MigratedEndpointsController {
             String convId = m.getClientId();
             if (convId == null || convId.trim().isEmpty()) continue;
 
-            Message existing = latestMessagePerConv.get(convId);
+            String canonicalConvId = convId;
+            if (convId.startsWith("team_chat_")) {
+                String remainder = convId.substring("team_chat_".length());
+                String[] parts = remainder.split("_");
+                if (parts.length == 2 && parts[0].compareTo(parts[1]) > 0) {
+                    canonicalConvId = "team_chat_" + parts[1] + "_" + parts[0];
+                }
+            }
+
+            Message existing = latestMessagePerConv.get(canonicalConvId);
             if (existing == null || (m.getTimestamp() != null && (existing.getTimestamp() == null || m.getTimestamp() > existing.getTimestamp()))) {
-                latestMessagePerConv.put(convId, m);
+                latestMessagePerConv.put(canonicalConvId, m);
             }
 
             boolean isUnread = (m.getIsRead() == null || !m.getIsRead());
             if (isUnread) {
                 if (userId != null && !userId.trim().isEmpty()) {
                     if (!userId.equals(m.getSenderId())) {
-                        unreadCountPerConv.put(convId, unreadCountPerConv.getOrDefault(convId, 0) + 1);
+                        unreadCountPerConv.put(canonicalConvId, unreadCountPerConv.getOrDefault(canonicalConvId, 0) + 1);
                     }
                 } else {
                     if ("client".equalsIgnoreCase(m.getSenderRole())) {
-                        unreadCountPerConv.put(convId, unreadCountPerConv.getOrDefault(convId, 0) + 1);
+                        unreadCountPerConv.put(canonicalConvId, unreadCountPerConv.getOrDefault(canonicalConvId, 0) + 1);
                     }
                 }
             }
 
             if (m.getText() != null && m.getText().contains("\"attachments\":[") && !m.getText().contains("\"attachments\":[]")) {
-                attachmentMap.put(convId, true);
+                attachmentMap.put(canonicalConvId, true);
             }
         }
 
@@ -1267,6 +1279,18 @@ public class MigratedEndpointsController {
         for (User u : allUsers) {
             if (u.getId() != null) {
                 userMap.put(u.getId(), u);
+            }
+            String email = u.getEmail();
+            if (email != null && !email.trim().isEmpty()) {
+                userMap.put(email.toLowerCase().trim(), u);
+                if (encryptionUtils != null && (email.endsWith("=") || email.length() > 40)) {
+                    try {
+                        String dec = encryptionUtils.decryptQueryable(email);
+                        if (dec != null && dec.contains("@")) {
+                            userMap.put(dec.toLowerCase().trim(), u);
+                        }
+                    } catch (Exception ignored) {}
+                }
             }
         }
 
@@ -1297,7 +1321,10 @@ public class MigratedEndpointsController {
                     String[] parts = remainder.split("_");
                     partnerId = (userId != null && parts.length > 1 && userId.equals(parts[0])) ? parts[1] : parts[0];
                 }
-                User partner = userMap.get(partnerId);
+                User partner = partnerId != null ? userMap.get(partnerId) : null;
+                if (partner == null && partnerId != null) {
+                    partner = userMap.get(partnerId.toLowerCase().trim());
+                }
                 conv.put("clientName", partner != null ? formatUserName(partner) : "Team Chat");
                 conv.put("isOnline", partnerId != null && chatWebSocketHandler.isUserOnline(partnerId));
                 conv.put("lastSeen", partner != null ? partner.getLastSeenTime() : null);

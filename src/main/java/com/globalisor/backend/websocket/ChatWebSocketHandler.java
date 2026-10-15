@@ -36,36 +36,93 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     // Map of userId to presence status
     private final ConcurrentHashMap<String, String> userPresenceStatus = new ConcurrentHashMap<>();
 
+    @Autowired(required = false)
+    private com.globalisor.backend.security.EncryptionUtils encryptionUtils;
+
     @Autowired
     public ChatWebSocketHandler(UserRepository userRepository) {
         this.userRepository = userRepository;
     }
 
+    private User resolveUser(String userId, String email) {
+        if (userId != null && !userId.trim().isEmpty()) {
+            Optional<User> uOpt = userRepository.findById(userId);
+            if (uOpt.isPresent()) return uOpt.get();
+        }
+        String searchEmail = (email != null && !email.trim().isEmpty()) ? email : (userId != null && userId.contains("@") ? userId : null);
+        if (searchEmail != null) {
+            String normSearch = searchEmail.toLowerCase().trim();
+            for (User u : userRepository.findAll()) {
+                String uEmail = u.getEmail();
+                if (uEmail != null) {
+                    if (uEmail.equalsIgnoreCase(normSearch)) return u;
+                    if (encryptionUtils != null && (uEmail.endsWith("=") || uEmail.length() > 40)) {
+                        try {
+                            String dec = encryptionUtils.decryptQueryable(uEmail);
+                            if (dec != null && dec.equalsIgnoreCase(normSearch)) return u;
+                        } catch (Exception ignored) {}
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private void registerSessionKey(String key, String sessionId) {
+        if (key == null || key.trim().isEmpty() || sessionId == null) return;
+        userSessions.computeIfAbsent(key.trim(), k -> new CopyOnWriteArrayList<>()).add(sessionId);
+    }
+
+    private void unregisterSessionKey(String key, String sessionId) {
+        if (key == null || sessionId == null) return;
+        CopyOnWriteArrayList<String> active = userSessions.get(key.trim());
+        if (active != null) {
+            active.remove(sessionId);
+            if (active.isEmpty()) {
+                userSessions.remove(key.trim());
+            }
+        }
+    }
+
     // Helper method to get map of online users
-    public boolean isUserOnline(String userId) {
-        CopyOnWriteArrayList<String> active = userSessions.get(userId);
+    public boolean isUserOnline(String identifier) {
+        if (identifier == null || identifier.trim().isEmpty()) return false;
+        String idKey = identifier.trim();
+        CopyOnWriteArrayList<String> active = userSessions.get(idKey);
+        if (active != null && !active.isEmpty()) return true;
+        active = userSessions.get(idKey.toLowerCase());
         return active != null && !active.isEmpty();
     }
 
-    public String getUserStatus(String userId) {
-        return userPresenceStatus.getOrDefault(userId, "offline");
+    public String getUserStatus(String identifier) {
+        if (identifier == null || identifier.trim().isEmpty()) return "offline";
+        String idKey = identifier.trim();
+        String st = userPresenceStatus.get(idKey);
+        if (st != null && !"offline".equalsIgnoreCase(st)) return st;
+        st = userPresenceStatus.get(idKey.toLowerCase());
+        return st != null ? st : "offline";
     }
 
     public void setUserStatus(String userId, String status) {
         if (status == null || userId == null) return;
         userPresenceStatus.put(userId, status);
-        try {
-            Optional<User> uOpt = userRepository.findById(userId);
-            if (uOpt.isPresent()) {
-                User u = uOpt.get();
-                u.setOnlineStatus(status.toUpperCase());
+        userPresenceStatus.put(userId.toLowerCase(), status);
+        User u = resolveUser(userId, null);
+        if (u != null) {
+            u.setOnlineStatus(status.toUpperCase());
+            try {
                 userRepository.save(u);
-            }
-        } catch (Exception ignored) {}
+            } catch (Exception ignored) {}
+            if (u.getId() != null) userPresenceStatus.put(u.getId(), status);
+            String uEmail = u.getEmail();
+            if (uEmail != null) userPresenceStatus.put(uEmail.toLowerCase().trim(), status);
+        }
         try {
             Map<String, Object> event = new ConcurrentHashMap<>();
             event.put("type", "presence");
             event.put("userId", userId);
+            if (u != null && u.getId() != null) event.put("realUserId", u.getId());
+            if (u != null && u.getEmail() != null) event.put("email", u.getEmail());
             event.put("status", status);
             String payload = objectMapper.writeValueAsString(event);
             broadcastAll(payload);
@@ -78,32 +135,63 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         sessions.put(session.getId(), session);
 
-        // Parse query params to identify user: e.g. ws://localhost:8080/api/ws/chat?userId=...&role=...
+        // Parse query params to identify user: e.g. ws://localhost:8080/api/ws/chat?userId=...&role=...&email=...
         URI uri = session.getUri();
         if (uri != null) {
             String query = uri.getQuery();
             if (query != null) {
                 String userId = getQueryParam(query, "userId");
                 String role = getQueryParam(query, "role");
+                String email = getQueryParam(query, "email");
                 if (userId != null && !userId.trim().isEmpty()) {
                     session.getAttributes().put("userId", userId);
-                    session.getAttributes().put("role", role);
+                    if (role != null) session.getAttributes().put("role", role);
+                    if (email != null) session.getAttributes().put("email", email);
 
-                    userSessions.computeIfAbsent(userId, k -> new CopyOnWriteArrayList<>()).add(session.getId());
+                    User user = resolveUser(userId, email);
+                    String realId = user != null ? user.getId() : null;
+                    String realEmail = user != null ? user.getEmail() : email;
+                    if (realEmail != null && encryptionUtils != null && (realEmail.endsWith("=") || realEmail.length() > 40)) {
+                        try {
+                            String dec = encryptionUtils.decryptQueryable(realEmail);
+                            if (dec != null && dec.contains("@")) realEmail = dec;
+                        } catch (Exception ignored) {}
+                    }
+                    String realName = user != null ? ((user.getFirstName() != null ? user.getFirstName() : "") + " " + (user.getLastName() != null ? user.getLastName() : "")).trim() : null;
+
+                    if (realId != null) session.getAttributes().put("realUserId", realId);
+                    if (realEmail != null) session.getAttributes().put("realEmail", realEmail);
+
+                    // Register session across all aliases
+                    registerSessionKey(userId, session.getId());
+                    if (realId != null && !realId.equals(userId)) registerSessionKey(realId, session.getId());
+                    if (realEmail != null) registerSessionKey(realEmail.toLowerCase().trim(), session.getId());
+                    if (email != null && !email.equalsIgnoreCase(realEmail)) registerSessionKey(email.toLowerCase().trim(), session.getId());
+
+                    // Mark online in presence status
                     userPresenceStatus.put(userId, "online");
+                    if (realId != null) userPresenceStatus.put(realId, "online");
+                    if (realEmail != null) userPresenceStatus.put(realEmail.toLowerCase().trim(), "online");
+                    if (email != null) userPresenceStatus.put(email.toLowerCase().trim(), "online");
 
+                    if (user != null) {
+                        try {
+                            user.setOnlineStatus("ONLINE");
+                            user.setLastSeenTime(System.currentTimeMillis());
+                            userRepository.save(user);
+                        } catch (Exception ignored) {}
+                    }
+
+                    // Send immediate presence snapshot of all active users to this connecting client
                     try {
-                        Optional<User> uOpt = userRepository.findById(userId);
-                        if (uOpt.isPresent()) {
-                            User u = uOpt.get();
-                            u.setOnlineStatus("ONLINE");
-                            u.setLastSeenTime(System.currentTimeMillis());
-                            userRepository.save(u);
-                        }
+                        Map<String, Object> snapshot = new ConcurrentHashMap<>();
+                        snapshot.put("type", "presence_snapshot");
+                        snapshot.put("statuses", userPresenceStatus);
+                        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(snapshot)));
                     } catch (Exception ignored) {}
 
-                    // Broadcast online status
-                    broadcastPresence(userId, true, null);
+                    // Broadcast online status to all sessions
+                    broadcastPresence(userId, realId, realEmail, realName, true, null);
                 }
             }
         }
@@ -132,32 +220,36 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         sessions.remove(session.getId());
 
         String userId = (String) session.getAttributes().get("userId");
-        if (userId != null && !userId.trim().isEmpty()) {
-            CopyOnWriteArrayList<String> active = userSessions.get(userId);
-            if (active != null) {
-                active.remove(session.getId());
-                if (active.isEmpty()) {
-                    userSessions.remove(userId);
-                    userPresenceStatus.put(userId, "offline");
-                    
-                    // Mark last seen and offline in DB
-                    Long lastSeen = System.currentTimeMillis();
-                    try {
-                        Optional<User> userOpt = userRepository.findById(userId);
-                        if (userOpt.isPresent()) {
-                            User user = userOpt.get();
-                            user.setOnlineStatus("OFFLINE");
-                            user.setLastSeenTime(lastSeen);
-                            userRepository.save(user);
-                        }
-                    } catch (Exception e) {
-                        log.warn("Failed to update last seen for user {}: {}", userId, e.getMessage());
-                    }
-                    
-                    // Broadcast offline status
-                    broadcastPresence(userId, false, lastSeen);
+        String realId = (String) session.getAttributes().get("realUserId");
+        String realEmail = (String) session.getAttributes().get("realEmail");
+        String email = (String) session.getAttributes().get("email");
+
+        if (userId != null) unregisterSessionKey(userId, session.getId());
+        if (realId != null) unregisterSessionKey(realId, session.getId());
+        if (realEmail != null) unregisterSessionKey(realEmail.toLowerCase().trim(), session.getId());
+        if (email != null) unregisterSessionKey(email.toLowerCase().trim(), session.getId());
+
+        boolean anyActive = isUserOnline(userId) || (realId != null && isUserOnline(realId)) || (realEmail != null && isUserOnline(realEmail)) || (email != null && isUserOnline(email));
+        if (!anyActive) {
+            Long lastSeen = System.currentTimeMillis();
+            if (userId != null) userPresenceStatus.put(userId, "offline");
+            if (realId != null) userPresenceStatus.put(realId, "offline");
+            if (realEmail != null) userPresenceStatus.put(realEmail.toLowerCase().trim(), "offline");
+            if (email != null) userPresenceStatus.put(email.toLowerCase().trim(), "offline");
+
+            User u = resolveUser(userId, realEmail != null ? realEmail : email);
+            if (u != null) {
+                try {
+                    u.setOnlineStatus("OFFLINE");
+                    u.setLastSeenTime(lastSeen);
+                    userRepository.save(u);
+                } catch (Exception e) {
+                    log.warn("Failed to update last seen for user {}: {}", userId, e.getMessage());
                 }
             }
+
+            // Broadcast offline status to all sessions
+            broadcastPresence(userId, realId, realEmail, null, false, lastSeen);
         }
     }
 
@@ -168,7 +260,16 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         Map<String, Object> data = objectMapper.readValue(payload, Map.class);
         String type = (String) data.get("type");
 
-        if ("typing".equals(type)) {
+        if ("ping".equals(type)) {
+            session.sendMessage(new TextMessage("{\"type\":\"pong\"}"));
+            return;
+        } else if ("presence_request".equals(type)) {
+            Map<String, Object> snapshot = new ConcurrentHashMap<>();
+            snapshot.put("type", "presence_snapshot");
+            snapshot.put("statuses", userPresenceStatus);
+            session.sendMessage(new TextMessage(objectMapper.writeValueAsString(snapshot)));
+            return;
+        } else if ("typing".equals(type)) {
             // Broadcast typing event to all sessions so members of group channels see it
             broadcastAll(payload);
         } else if ("call_signal".equals(type)) {
@@ -177,7 +278,11 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                 broadcastToUser(targetUserId, payload);
             }
         } else if ("presence".equals(type) || "status_change".equals(type)) {
-            broadcastAll(payload);
+            String status = (String) data.get("status");
+            String userId = (String) session.getAttributes().get("userId");
+            if (userId != null && status != null) {
+                setUserStatus(userId, status);
+            }
         }
     }
 
@@ -190,11 +295,14 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    private void broadcastPresence(String userId, boolean isOnline, Long lastSeen) {
+    public void broadcastPresence(String userId, String realUserId, String email, String name, boolean isOnline, Long lastSeen) {
         try {
             Map<String, Object> event = new ConcurrentHashMap<>();
             event.put("type", "presence");
             event.put("userId", userId);
+            if (realUserId != null) event.put("realUserId", realUserId);
+            if (email != null) event.put("email", email);
+            if (name != null) event.put("name", name);
             event.put("status", isOnline ? "online" : "offline");
             if (lastSeen != null) {
                 event.put("lastSeen", lastSeen);
@@ -204,6 +312,10 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         } catch (Exception e) {
             // ignore
         }
+    }
+
+    private void broadcastPresence(String userId, boolean isOnline, Long lastSeen) {
+        broadcastPresence(userId, null, null, null, isOnline, lastSeen);
     }
 
     public void broadcastMessageNotification(Object message) {

@@ -294,12 +294,20 @@ public class MessagesEnhancementController {
             }
             map.put("email", email);
 
-            boolean online = chatWebSocketHandler.isUserOnline(u.getId());
+            boolean online = chatWebSocketHandler.isUserOnline(u.getId()) || (email != null && chatWebSocketHandler.isUserOnline(email.toLowerCase().trim()));
             String status = chatWebSocketHandler.getUserStatus(u.getId());
-            if (!online && "ONLINE".equalsIgnoreCase(u.getOnlineStatus())) {
-                online = true;
+            if (("offline".equalsIgnoreCase(status) || status == null) && email != null) {
+                String stEmail = chatWebSocketHandler.getUserStatus(email.toLowerCase().trim());
+                if (stEmail != null && !"offline".equalsIgnoreCase(stEmail)) {
+                    status = stEmail;
+                }
             }
-            if ("offline".equalsIgnoreCase(status) && !chatWebSocketHandler.isUserOnline(u.getId())) {
+            if (!online && "ONLINE".equalsIgnoreCase(u.getOnlineStatus())) {
+                if (u.getLastSeenTime() != null && System.currentTimeMillis() - u.getLastSeenTime() < 300000) {
+                    online = true;
+                }
+            }
+            if ("offline".equalsIgnoreCase(status) && !chatWebSocketHandler.isUserOnline(u.getId()) && (email == null || !chatWebSocketHandler.isUserOnline(email.toLowerCase().trim()))) {
                 online = false;
             }
             map.put("isOnline", online && !"offline".equalsIgnoreCase(status));
