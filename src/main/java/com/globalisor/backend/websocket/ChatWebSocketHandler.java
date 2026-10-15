@@ -52,8 +52,16 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     }
 
     public void setUserStatus(String userId, String status) {
-        if (status == null) return;
+        if (status == null || userId == null) return;
         userPresenceStatus.put(userId, status);
+        try {
+            Optional<User> uOpt = userRepository.findById(userId);
+            if (uOpt.isPresent()) {
+                User u = uOpt.get();
+                u.setOnlineStatus(status.toUpperCase());
+                userRepository.save(u);
+            }
+        } catch (Exception ignored) {}
         try {
             Map<String, Object> event = new ConcurrentHashMap<>();
             event.put("type", "presence");
@@ -77,12 +85,22 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             if (query != null) {
                 String userId = getQueryParam(query, "userId");
                 String role = getQueryParam(query, "role");
-                if (userId != null) {
+                if (userId != null && !userId.trim().isEmpty()) {
                     session.getAttributes().put("userId", userId);
                     session.getAttributes().put("role", role);
 
                     userSessions.computeIfAbsent(userId, k -> new CopyOnWriteArrayList<>()).add(session.getId());
                     userPresenceStatus.put(userId, "online");
+
+                    try {
+                        Optional<User> uOpt = userRepository.findById(userId);
+                        if (uOpt.isPresent()) {
+                            User u = uOpt.get();
+                            u.setOnlineStatus("ONLINE");
+                            u.setLastSeenTime(System.currentTimeMillis());
+                            userRepository.save(u);
+                        }
+                    } catch (Exception ignored) {}
 
                     // Broadcast online status
                     broadcastPresence(userId, true, null);
@@ -114,7 +132,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         sessions.remove(session.getId());
 
         String userId = (String) session.getAttributes().get("userId");
-        if (userId != null) {
+        if (userId != null && !userId.trim().isEmpty()) {
             CopyOnWriteArrayList<String> active = userSessions.get(userId);
             if (active != null) {
                 active.remove(session.getId());
@@ -122,12 +140,13 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                     userSessions.remove(userId);
                     userPresenceStatus.put(userId, "offline");
                     
-                    // Mark last seen in DB
+                    // Mark last seen and offline in DB
                     Long lastSeen = System.currentTimeMillis();
                     try {
                         Optional<User> userOpt = userRepository.findById(userId);
                         if (userOpt.isPresent()) {
                             User user = userOpt.get();
+                            user.setOnlineStatus("OFFLINE");
                             user.setLastSeenTime(lastSeen);
                             userRepository.save(user);
                         }
@@ -234,24 +253,37 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             String target = notification.getClientId();
             if ("all".equals(target)) {
                 broadcastAll(payload);
-            } else if ("admin".equals(target) || "staff".equals(target)) {
+            } else if ("admin".equals(target) || "staff".equals(target) || "support".equals(target)) {
                 broadcastToRole(payload, "admin", "staff");
             } else if (target != null && target.startsWith("chat_")) {
-                String[] parts = target.split("_");
-                if (parts.length >= 3) {
-                    broadcastToUser(parts[1], payload);
-                    broadcastToUser(parts[2], payload);
+                String remainder = target.substring("chat_".length());
+                for (String uId : userSessions.keySet()) {
+                    if (remainder.contains(uId)) {
+                        broadcastToUser(uId, payload);
+                    }
                 }
             } else if (target != null && target.startsWith("team_chat_")) {
-                String[] parts = target.split("_");
-                if (parts.length >= 4) {
-                    broadcastToUser(parts[2], payload);
-                    broadcastToUser(parts[3], payload);
+                String remainder = target.substring("team_chat_".length());
+                boolean delivered = false;
+                for (String uId : userSessions.keySet()) {
+                    if (remainder.contains(uId)) {
+                        broadcastToUser(uId, payload);
+                        delivered = true;
+                    }
                 }
-            } else if (target != null && target.startsWith("team_group_")) {
-                broadcastToRole(payload, "admin", "staff");
+                if (!delivered) {
+                    String[] parts = remainder.split("_");
+                    for (String part : parts) {
+                        broadcastToUser(part, payload);
+                    }
+                }
+            } else if (target != null && (target.startsWith("team_group_") || target.startsWith("group-"))) {
+                broadcastAll(payload);
             } else {
                 broadcastToUser(target, payload);
+                if (target != null && (target.startsWith("C-") || target.length() == 24)) {
+                    broadcastToRole(payload, "admin", "staff");
+                }
             }
         } catch (Exception e) {
             // ignore

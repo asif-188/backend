@@ -72,6 +72,8 @@ public class MigratedEndpointsController {
     @Autowired
     OnboardingRepository onboardingRepository;
 
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+
     // --- BLOG ENDPOINTS ---
     @GetMapping("/blogs")
     public ResponseEntity<List<Blog>> getAllBlogs() {
@@ -1122,15 +1124,57 @@ public class MigratedEndpointsController {
     // --- MESSAGE ENDPOINTS ---
     @GetMapping("/messages")
     public ResponseEntity<List<Message>> getMessages(@RequestParam(required = false) String clientId) {
-        List<Message> list;
-        if (clientId != null && !clientId.isEmpty()) {
-            list = messageRepository.findByClientId(clientId);
+        List<Message> list = new ArrayList<>();
+        if (clientId != null && !clientId.trim().isEmpty()) {
+            list.addAll(messageRepository.findByClientId(clientId));
+
+            // If clientId is a direct client ID, also include messages from 1-on-1 chats involving this client
+            if (!clientId.startsWith("team_chat_") && !clientId.startsWith("group-") && !clientId.startsWith("team_group_")) {
+                List<Message> all = messageRepository.findAll();
+                for (Message m : all) {
+                    if (m.getClientId() != null && (m.getClientId().startsWith("team_chat_") || m.getClientId().startsWith("chat_"))) {
+                        if (m.getClientId().contains(clientId)) {
+                            list.add(m);
+                        }
+                    }
+                }
+            } else if (clientId.startsWith("team_chat_")) {
+                // If it's a team chat between client and staff (e.g. team_chat_C-1001_staff-sarah),
+                // also include direct messages under the client's direct ID
+                String remainder = clientId.substring("team_chat_".length());
+                String[] parts = remainder.split("_");
+                if (parts.length >= 2) {
+                    String p1 = parts[0];
+                    String p2 = parts[parts.length - 1];
+                    for (Message m : messageRepository.findByClientId(p1)) {
+                        if ((p1.equals(m.getSenderId()) && p2.equals(m.getClientId())) ||
+                            (p2.equals(m.getSenderId()) && p1.equals(m.getClientId()))) {
+                            list.add(m);
+                        }
+                    }
+                    for (Message m : messageRepository.findByClientId(p2)) {
+                        if ((p1.equals(m.getSenderId()) && p2.equals(m.getClientId())) ||
+                            (p2.equals(m.getSenderId()) && p1.equals(m.getClientId()))) {
+                            list.add(m);
+                        }
+                    }
+                }
+            }
         } else {
-            list = messageRepository.findAll();
+            list.addAll(messageRepository.findAll());
         }
+
+        // Deduplicate by message ID preserving order
+        Map<String, Message> uniqueMap = new LinkedHashMap<>();
+        for (Message m : list) {
+            if (m.getId() != null) {
+                uniqueMap.put(m.getId(), m);
+            }
+        }
+        List<Message> result = new ArrayList<>(uniqueMap.values());
         // Sort by timestamp ascending (chronological chat history)
-        list.sort(Comparator.comparingLong(Message::getTimestamp));
-        return ResponseEntity.ok(list);
+        result.sort(Comparator.comparingLong(m -> m.getTimestamp() != null ? m.getTimestamp() : 0L));
+        return ResponseEntity.ok(result);
     }
 
     @PostMapping("/messages")
@@ -1151,10 +1195,11 @@ public class MigratedEndpointsController {
         Notification notif = new Notification();
         notif.setId("notif-" + System.currentTimeMillis());
         notif.setTitle("New Message");
-        notif.setMessage(message.getSenderName() + ": " + message.getText());
+        String cleanText = extractCleanText(message.getText());
+        notif.setMessage(message.getSenderName() + ": " + cleanText);
         notif.setType("message");
         notif.setRelatedId(message.getClientId());
-        if ("client".equals(message.getSenderRole())) {
+        if ("client".equalsIgnoreCase(message.getSenderRole())) {
             notif.setClientId("admin");
         } else {
             notif.setClientId(message.getClientId());
@@ -1184,22 +1229,36 @@ public class MigratedEndpointsController {
     }
 
     @GetMapping("/messages/conversations")
-    public ResponseEntity<List<Map<String, Object>>> getConversations() {
+    public ResponseEntity<List<Map<String, Object>>> getConversations(@RequestParam(required = false) String userId) {
         List<Message> allMessages = messageRepository.findAll();
-        Map<String, Message> latestMessagePerClient = new HashMap<>();
-        Map<String, Integer> unreadCountPerClient = new HashMap<>();
+        Map<String, Message> latestMessagePerConv = new HashMap<>();
+        Map<String, Integer> unreadCountPerConv = new HashMap<>();
+        Map<String, Boolean> attachmentMap = new HashMap<>();
 
         for (Message m : allMessages) {
-            if (m.getClientId() == null) continue;
-            if (m.getClientId().startsWith("team_chat_") || m.getClientId().startsWith("team_group_")) continue;
+            String convId = m.getClientId();
+            if (convId == null || convId.trim().isEmpty()) continue;
 
-            Message existing = latestMessagePerClient.get(m.getClientId());
-            if (existing == null || m.getTimestamp() > existing.getTimestamp()) {
-                latestMessagePerClient.put(m.getClientId(), m);
+            Message existing = latestMessagePerConv.get(convId);
+            if (existing == null || (m.getTimestamp() != null && (existing.getTimestamp() == null || m.getTimestamp() > existing.getTimestamp()))) {
+                latestMessagePerConv.put(convId, m);
             }
 
-            if ("client".equalsIgnoreCase(m.getSenderRole()) && (m.getIsRead() == null || !m.getIsRead())) {
-                unreadCountPerClient.put(m.getClientId(), unreadCountPerClient.getOrDefault(m.getClientId(), 0) + 1);
+            boolean isUnread = (m.getIsRead() == null || !m.getIsRead());
+            if (isUnread) {
+                if (userId != null && !userId.trim().isEmpty()) {
+                    if (!userId.equals(m.getSenderId())) {
+                        unreadCountPerConv.put(convId, unreadCountPerConv.getOrDefault(convId, 0) + 1);
+                    }
+                } else {
+                    if ("client".equalsIgnoreCase(m.getSenderRole())) {
+                        unreadCountPerConv.put(convId, unreadCountPerConv.getOrDefault(convId, 0) + 1);
+                    }
+                }
+            }
+
+            if (m.getText() != null && m.getText().contains("\"attachments\":[") && !m.getText().contains("\"attachments\":[]")) {
+                attachmentMap.put(convId, true);
             }
         }
 
@@ -1212,23 +1271,53 @@ public class MigratedEndpointsController {
         }
 
         List<Map<String, Object>> conversations = new ArrayList<>();
-        for (Map.Entry<String, Message> entry : latestMessagePerClient.entrySet()) {
-            String clientId = entry.getKey();
+
+        for (Map.Entry<String, Message> entry : latestMessagePerConv.entrySet()) {
+            String convId = entry.getKey();
             Message latestMsg = entry.getValue();
 
-            User userOpt = userMap.get(clientId);
-            if (userOpt == null || (!"CLIENT".equalsIgnoreCase(userOpt.getRole()) && !"USER".equalsIgnoreCase(userOpt.getRole()))) {
-                continue;
-            }
-
             Map<String, Object> conv = new HashMap<>();
-            conv.put("clientId", clientId);
-            conv.put("clientName", formatUserName(userOpt));
+            conv.put("clientId", convId);
             conv.put("lastMessage", extractCleanText(latestMsg.getText()));
-            conv.put("lastMessageTime", latestMsg.getTimestamp());
-            conv.put("unreadCount", unreadCountPerClient.getOrDefault(clientId, 0));
-            conv.put("isOnline", chatWebSocketHandler.isUserOnline(clientId));
-            conv.put("lastSeen", userOpt.getLastSeenTime());
+            conv.put("lastMessageTime", latestMsg.getTimestamp() != null ? latestMsg.getTimestamp() : 0L);
+            conv.put("unreadCount", unreadCountPerConv.getOrDefault(convId, 0));
+            conv.put("hasAttachment", attachmentMap.getOrDefault(convId, false));
+
+            if (convId.startsWith("team_chat_")) {
+                String remainder = convId.substring("team_chat_".length());
+                String partnerId = null;
+                if (userId != null && !userId.trim().isEmpty()) {
+                    if (remainder.startsWith(userId + "_")) {
+                        partnerId = remainder.substring(userId.length() + 1);
+                    } else if (remainder.endsWith("_" + userId)) {
+                        partnerId = remainder.substring(0, remainder.length() - userId.length() - 1);
+                    }
+                }
+                if (partnerId == null) {
+                    String[] parts = remainder.split("_");
+                    partnerId = (userId != null && parts.length > 1 && userId.equals(parts[0])) ? parts[1] : parts[0];
+                }
+                User partner = userMap.get(partnerId);
+                conv.put("clientName", partner != null ? formatUserName(partner) : "Team Chat");
+                conv.put("isOnline", partnerId != null && chatWebSocketHandler.isUserOnline(partnerId));
+                conv.put("lastSeen", partner != null ? partner.getLastSeenTime() : null);
+                conv.put("role", partner != null ? (partner.getRole() != null ? partner.getRole().toLowerCase() : "staff") : "staff");
+                conv.put("partnerId", partnerId);
+                conv.put("isGroup", false);
+            } else if (convId.startsWith("group-") || convId.startsWith("team_group_")) {
+                conv.put("clientName", "Group Channel");
+                conv.put("isOnline", false);
+                conv.put("lastSeen", null);
+                conv.put("role", "group");
+                conv.put("isGroup", true);
+            } else {
+                User clientUser = userMap.get(convId);
+                conv.put("clientName", clientUser != null ? formatUserName(clientUser) : convId);
+                conv.put("isOnline", chatWebSocketHandler.isUserOnline(convId));
+                conv.put("lastSeen", clientUser != null ? clientUser.getLastSeenTime() : null);
+                conv.put("role", clientUser != null ? (clientUser.getRole() != null ? clientUser.getRole().toLowerCase() : "client") : "client");
+                conv.put("isGroup", false);
+            }
 
             conversations.add(conv);
         }
@@ -1241,14 +1330,21 @@ public class MigratedEndpointsController {
         if (text == null) return "";
         String trimmed = text.trim();
         if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-            int textIdx = trimmed.indexOf("\"text\":\"");
-            if (textIdx != -1) {
-                int start = textIdx + 8;
-                int end = trimmed.indexOf("\"", start);
-                if (end != -1) {
-                    return trimmed.substring(start, end);
+            try {
+                com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(trimmed);
+                String msgText = root.path("text").asText("");
+                if (!msgText.trim().isEmpty()) {
+                    return msgText.trim();
                 }
-            }
+                com.fasterxml.jackson.databind.JsonNode attachments = root.path("attachments");
+                if (attachments.isArray() && attachments.size() > 0) {
+                    String attName = attachments.get(0).path("name").asText("");
+                    return attName.isEmpty() ? "📎 [Attachment]" : "📎 " + attName;
+                }
+                if (root.has("replyTo")) {
+                    return root.path("replyTo").path("text").asText("Replied to message");
+                }
+            } catch (Exception ignored) {}
         }
         return text;
     }
@@ -1332,7 +1428,8 @@ public class MigratedEndpointsController {
             for (User u : users) {
                 if ("ADMIN".equalsIgnoreCase(u.getRole()) || "STAFF".equalsIgnoreCase(u.getRole())) {
                     boolean online = chatWebSocketHandler.isUserOnline(u.getId());
-                    if (online) {
+                    String status = chatWebSocketHandler.getUserStatus(u.getId());
+                    if (online && !"offline".equalsIgnoreCase(status)) {
                         anyOnline = true;
                     } else if (u.getLastSeenTime() != null) {
                         if (latestLastSeen == null || u.getLastSeenTime() > latestLastSeen) {
@@ -1344,7 +1441,19 @@ public class MigratedEndpointsController {
             res.put("isOnline", anyOnline);
             res.put("lastSeen", latestLastSeen);
         } else {
+            Map<String, Object> allPresences = new HashMap<>();
+            for (User u : userRepository.findAll()) {
+                if (u.getId() == null) continue;
+                boolean online = chatWebSocketHandler.isUserOnline(u.getId());
+                String status = chatWebSocketHandler.getUserStatus(u.getId());
+                Map<String, Object> p = new HashMap<>();
+                p.put("isOnline", online && !"offline".equalsIgnoreCase(status));
+                p.put("status", status != null && !"offline".equals(status) ? status : (online ? "online" : "offline"));
+                p.put("lastSeen", u.getLastSeenTime());
+                allPresences.put(u.getId(), p);
+            }
             res.put("isOnline", false);
+            res.put("presences", allPresences);
         }
 
         return ResponseEntity.ok(res);

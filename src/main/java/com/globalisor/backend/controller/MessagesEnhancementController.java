@@ -32,6 +32,9 @@ public class MessagesEnhancementController {
     @Autowired
     private ChatWebSocketHandler chatWebSocketHandler;
 
+    @Autowired(required = false)
+    private com.globalisor.backend.security.EncryptionUtils encryptionUtils;
+
     // --- Dynamic Group Chats ---
 
     @GetMapping("/groups")
@@ -273,9 +276,35 @@ public class MessagesEnhancementController {
         for (User u : users) {
             Map<String, Object> map = new HashMap<>();
             map.put("id", u.getId());
-            map.put("name", (u.getFirstName() + " " + u.getLastName()).trim());
+            String fullName = ((u.getFirstName() != null ? u.getFirstName() : "") + " " + (u.getLastName() != null ? u.getLastName() : "")).trim();
+            if (fullName.isEmpty()) {
+                fullName = u.getCompanyName() != null ? u.getCompanyName() : (u.getEmail() != null ? u.getEmail() : "User");
+            }
+            map.put("name", fullName);
             map.put("role", u.getRole());
-            map.put("email", u.getEmail());
+            
+            String email = u.getEmail();
+            if (email != null && encryptionUtils != null && (email.endsWith("=") || email.length() > 40)) {
+                try {
+                    String dec = encryptionUtils.decryptQueryable(email);
+                    if (dec != null && dec.contains("@")) {
+                        email = dec;
+                    }
+                } catch (Exception ignored) {}
+            }
+            map.put("email", email);
+
+            boolean online = chatWebSocketHandler.isUserOnline(u.getId());
+            String status = chatWebSocketHandler.getUserStatus(u.getId());
+            if (!online && "ONLINE".equalsIgnoreCase(u.getOnlineStatus())) {
+                online = true;
+            }
+            if ("offline".equalsIgnoreCase(status) && !chatWebSocketHandler.isUserOnline(u.getId())) {
+                online = false;
+            }
+            map.put("isOnline", online && !"offline".equalsIgnoreCase(status));
+            map.put("status", status != null && !"offline".equals(status) ? status : (online ? "online" : "offline"));
+            map.put("lastSeen", u.getLastSeenTime());
             userList.add(map);
         }
         return ResponseEntity.ok(userList);
