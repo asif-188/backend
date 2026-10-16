@@ -55,14 +55,6 @@ public class DashboardController {
                 .collect(Collectors.toSet());
 
         List<Requirement> requirements = requirementRepository.findAll();
-        Set<String> incompleteAppUserIds = requirements.stream()
-                .filter(r -> {
-                    String st = r.getStatus() != null ? r.getStatus().toLowerCase().trim() : "";
-                    return !st.contains("completed");
-                })
-                .map(Requirement::getUserId)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toSet());
 
         List<User> users = allUsers.stream()
                 .filter(u -> {
@@ -76,16 +68,14 @@ public class DashboardController {
                     if ("PENDING_APPROVAL".equalsIgnoreCase(u.getStatus())) {
                         return false;
                     }
-                    if (u.getId() != null && incompleteAppUserIds.contains(u.getId())) {
-                        return false;
-                    }
                     return true;
                 })
                 .collect(Collectors.toList());
 
         List<DashboardResponse.ClientInfo> clientInfos = users.stream().map(user -> {
             List<Requirement> userReqs = requirements.stream()
-                    .filter(r -> r.getUserId().equals(user.getId()))
+                    .filter(r -> (r.getUserId() != null && r.getUserId().equals(user.getId())) ||
+                                 (user.getEmail() != null && r.getData() != null && user.getEmail().equalsIgnoreCase(String.valueOf(r.getData().get("email")))))
                     .collect(Collectors.toList());
 
             String latestStatus = userReqs.isEmpty() ? "pending" : userReqs.get(0).getStatus();
