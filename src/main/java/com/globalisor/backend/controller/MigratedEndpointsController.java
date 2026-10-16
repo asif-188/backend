@@ -2129,16 +2129,6 @@ public class MigratedEndpointsController {
             @RequestParam(required = false) String staffName) {
 
         List<User> allUsers = userRepository.findAll();
-        List<Requirement> allReqs = requirementRepository.findAll();
-        Set<String> incompleteAppUserIds = allReqs.stream()
-                .filter(r -> {
-                    String st = r.getStatus() != null ? r.getStatus().toLowerCase().trim() : "";
-                    return !st.contains("completed");
-                })
-                .map(Requirement::getUserId)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toSet());
-
         List<User> clients = allUsers.stream().filter(u -> {
             String role = u.getRole();
             if (role != null) {
@@ -2148,9 +2138,6 @@ public class MigratedEndpointsController {
                 }
             }
             if ("PENDING_APPROVAL".equalsIgnoreCase(u.getStatus())) {
-                return false;
-            }
-            if (u.getId() != null && incompleteAppUserIds.contains(u.getId())) {
                 return false;
             }
             return true;

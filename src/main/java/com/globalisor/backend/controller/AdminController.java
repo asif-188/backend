@@ -1435,17 +1435,6 @@ public class AdminController {
 
         List<User> users = userRepository.findAll();
 
-        // Exclude applicants whose incorporation/application process has not completed
-        List<Requirement> allReqs = requirementRepository.findAll();
-        Set<String> incompleteAppUserIds = allReqs.stream()
-                .filter(r -> {
-                    String st = r.getStatus() != null ? r.getStatus().toLowerCase().trim() : "";
-                    return !st.contains("completed");
-                })
-                .map(Requirement::getUserId)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toSet());
-
         List<User> clients = users.stream().filter(u -> {
             String role = u.getRole();
             if (role != null) {
@@ -1455,9 +1444,6 @@ public class AdminController {
                 }
             }
             if ("PENDING_APPROVAL".equalsIgnoreCase(u.getStatus())) {
-                return false;
-            }
-            if (u.getId() != null && incompleteAppUserIds.contains(u.getId())) {
                 return false;
             }
             return true;
