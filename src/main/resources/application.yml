@@ -8,7 +8,7 @@ spring:
     name: backend
   data:
     mongodb:
-      uri: ${SPRING_DATA_MONGODB_URI:mongodb+srv://piyush_db_user:V6P3Y52aIXElLWNs@smartcosec.ttli1le.mongodb.net/globalisor?appName=smartcosec}
+      uri: ${SPRING_DATA_MONGODB_URI:mongodb://localhost:27017/globalisor}
       database: ${SPRING_DATA_MONGODB_DATABASE:globalisor}
       auto-index-creation: false
 
@@ -61,10 +61,4 @@ compliancebox:
     url: ${COMPLIANCEBOX_API_URL:https://api.compliancebox.co/api/clients}
     token: ${COMPLIANCEBOX_TOKEN:4d3693b0-201c-4204-9729-e7d779a613b6}
     company-id: ${COMPLIANCEBOX_COMPANY_ID:629dbca7374a1ac76b559ee7}
-
-bizfile:
-  rpa:
-    headless: ${BIZFILE_RPA_HEADLESS:true}
-
-
 

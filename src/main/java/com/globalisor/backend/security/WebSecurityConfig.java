@@ -101,7 +101,6 @@ public class WebSecurityConfig {
                         .requestMatchers("/api/tasks", "/api/tasks/**").permitAll()
                         .requestMatchers("/api/staff", "/api/staff/**").permitAll()
                         .requestMatchers("/api/integrations", "/api/integrations/**").permitAll()
-                        .requestMatchers("/api/bizfile", "/api/bizfile/**").permitAll()
                         .requestMatchers("/error").permitAll()
                         .anyRequest().authenticated()
                 );
