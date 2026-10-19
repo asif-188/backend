@@ -7,7 +7,9 @@ import com.globalisor.backend.repository.OnboardingRepository;
 import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.*;
 
@@ -892,6 +894,14 @@ public class TaskService {
     }
 
     public void deleteTask(String id) {
+        Task task = taskRepository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Task not found with id: " + id));
+
+        String status = task.getStatus() != null ? task.getStatus().toUpperCase() : "PENDING";
+        if (!"PENDING".equals(status)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Task cannot be deleted because it has already moved past the initial stage. Current status: " + status);
+        }
         taskRepository.deleteById(id);
     }
 }
