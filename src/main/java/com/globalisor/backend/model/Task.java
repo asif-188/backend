@@ -92,6 +92,7 @@ public class Task {
     private String reminderActionNotes;
     private Long reminderRescheduledAt;
     private String reminderRescheduledBy;
+    private UserRef reminderAssignedTo;
 
     @Indexed
     private Long createdAt;

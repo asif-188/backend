@@ -624,6 +624,31 @@ public class TaskService {
         return saved;
     }
 
+    public Task updatePriority(String taskId, String newPriority, String performedByName, String performedByRole) {
+        Task task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new RuntimeException("Task not found with id: " + taskId));
+
+        long now = System.currentTimeMillis();
+        String oldPriority = task.getPriority() != null ? task.getPriority() : "MEDIUM";
+        String normalizedPriority = newPriority != null ? newPriority.toUpperCase().trim() : "MEDIUM";
+        task.setPriority(normalizedPriority);
+        task.setUpdatedAt(now);
+
+        if (task.getActivityLog() == null) {
+            task.setActivityLog(new ArrayList<>());
+        }
+        task.getActivityLog().add(Task.ActivityLog.builder()
+                .id("act-" + UUID.randomUUID())
+                .action("PRIORITY_CHANGED")
+                .details("Priority updated from " + oldPriority + " to " + normalizedPriority)
+                .performedBy(performedByName != null ? performedByName : "Staff Specialist")
+                .performedByRole(performedByRole != null ? performedByRole : "STAFF")
+                .timestamp(now)
+                .build());
+
+        return taskRepository.save(task);
+    }
+
     public Task addComment(String taskId, Task.Comment comment) {
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new RuntimeException("Task not found with id: " + taskId));
@@ -914,6 +939,10 @@ public class TaskService {
     }
 
     public Task setReminder(String taskId, String reminderDateTime, String reminderNote, String performedByName, String performedByRole) {
+        return setReminder(taskId, reminderDateTime, reminderNote, null, performedByName, performedByRole);
+    }
+
+    public Task setReminder(String taskId, String reminderDateTime, String reminderNote, Task.UserRef reminderAssignedTo, String performedByName, String performedByRole) {
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Task not found with id: " + taskId));
 
@@ -921,9 +950,13 @@ public class TaskService {
         task.setReminderDateTime(reminderDateTime);
         task.setReminderNote(reminderNote);
         task.setReminderStatus("PENDING");
+        task.setReminderAssignedTo(reminderAssignedTo != null ? reminderAssignedTo : task.getAssignedTo());
         task.setUpdatedAt(now);
 
-        String detailText = "Scheduled next follow-up reminder for " + reminderDateTime +
+        String staffPart = (task.getReminderAssignedTo() != null && task.getReminderAssignedTo().getName() != null)
+                ? " (Assigned to: " + task.getReminderAssignedTo().getName() + ")" : "";
+
+        String detailText = "Scheduled next follow-up reminder for " + reminderDateTime + staffPart +
                 (reminderNote != null && !reminderNote.isBlank() ? " ('" + reminderNote + "')" : "");
 
         if (task.getActivityLog() == null) task.setActivityLog(new ArrayList<>());
@@ -944,6 +977,7 @@ public class TaskService {
                 .authorRole(performedByRole != null ? performedByRole : "STAFF")
                 .authorAvatar("RM")
                 .text("⏰ Next Follow-up Reminder Scheduled:\n" + reminderDateTime +
+                        (staffPart.isEmpty() ? "" : "\nStaff: " + task.getReminderAssignedTo().getName()) +
                         (reminderNote != null && !reminderNote.isBlank() ? "\nNote: " + reminderNote : ""))
                 .isInternal(true)
                 .timestamp(now)
@@ -993,6 +1027,10 @@ public class TaskService {
     }
 
     public Task rescheduleReminder(String taskId, String newReminderDateTime, String rescheduleReason, String performedByName, String performedByRole) {
+        return rescheduleReminder(taskId, newReminderDateTime, rescheduleReason, null, performedByName, performedByRole);
+    }
+
+    public Task rescheduleReminder(String taskId, String newReminderDateTime, String rescheduleReason, Task.UserRef reminderAssignedTo, String performedByName, String performedByRole) {
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Task not found with id: " + taskId));
 
@@ -1005,9 +1043,15 @@ public class TaskService {
         if (rescheduleReason != null && !rescheduleReason.isBlank()) {
             task.setReminderNote(rescheduleReason);
         }
+        if (reminderAssignedTo != null) {
+            task.setReminderAssignedTo(reminderAssignedTo);
+        }
         task.setUpdatedAt(now);
 
-        String detailText = "Follow-up reminder rescheduled from " + oldDateTime + " to " + newReminderDateTime +
+        String staffPart = (task.getReminderAssignedTo() != null && task.getReminderAssignedTo().getName() != null)
+                ? " (Assigned to: " + task.getReminderAssignedTo().getName() + ")" : "";
+
+        String detailText = "Follow-up reminder rescheduled from " + oldDateTime + " to " + newReminderDateTime + staffPart +
                 (rescheduleReason != null && !rescheduleReason.isBlank() ? ". Reason: " + rescheduleReason : "");
 
         if (task.getActivityLog() == null) task.setActivityLog(new ArrayList<>());
@@ -1027,6 +1071,7 @@ public class TaskService {
                 .authorRole(performedByRole != null ? performedByRole : "STAFF")
                 .authorAvatar("RM")
                 .text("🔄 Follow-up Rescheduled to " + newReminderDateTime + " by " + (performedByName != null ? performedByName : "Staff") +
+                        (staffPart.isEmpty() ? "" : "\nStaff: " + task.getReminderAssignedTo().getName()) +
                         (rescheduleReason != null && !rescheduleReason.isBlank() ? "\nReason: " + rescheduleReason : ""))
                 .isInternal(true)
                 .timestamp(now)
@@ -1036,6 +1081,10 @@ public class TaskService {
     }
 
     public List<Task> getDueReminders() {
+        return getDueReminders(null);
+    }
+
+    public List<Task> getDueReminders(String staffId) {
         List<Task> all = taskRepository.findAll(Sort.by(Sort.Direction.ASC, "reminderDateTime"));
         long now = System.currentTimeMillis();
         List<Task> due = new ArrayList<>();
@@ -1047,6 +1096,13 @@ public class TaskService {
             String status = t.getReminderStatus();
             if ("COMPLETED".equalsIgnoreCase(status) || "CANCELLED".equalsIgnoreCase(status)) {
                 continue;
+            }
+            if (staffId != null && !staffId.isBlank()) {
+                String assignedId = t.getReminderAssignedTo() != null ? t.getReminderAssignedTo().getId() :
+                        (t.getAssignedTo() != null ? t.getAssignedTo().getId() : null);
+                if (assignedId != null && !assignedId.equalsIgnoreCase(staffId.trim())) {
+                    continue;
+                }
             }
             // Parse reminderDateTime (supports ISO "YYYY-MM-DDTHH:mm" or "YYYY-MM-DD HH:mm" or timestamp)
             try {

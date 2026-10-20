@@ -126,6 +126,19 @@ public class TaskController {
         return ResponseEntity.ok(updated);
     }
 
+    @PutMapping("/{id}/priority")
+    public ResponseEntity<Task> updatePriority(
+            @PathVariable String id,
+            @RequestBody Map<String, Object> payload
+    ) {
+        String priority = (String) payload.get("priority");
+        String performedBy = (String) payload.getOrDefault("performedBy", "Staff Specialist");
+        String performedByRole = (String) payload.getOrDefault("performedByRole", "STAFF");
+
+        Task updated = taskService.updatePriority(id, priority, performedBy, performedByRole);
+        return ResponseEntity.ok(updated);
+    }
+
     @PostMapping("/{id}/comments")
     public ResponseEntity<Task> addComment(
             @PathVariable String id,
@@ -155,7 +168,10 @@ public class TaskController {
         String reminderNote = (String) payload.get("reminderNote");
         String performedBy = (String) payload.getOrDefault("performedBy", "Staff");
         String performedByRole = (String) payload.getOrDefault("performedByRole", "STAFF");
-        return ResponseEntity.ok(taskService.setReminder(id, reminderDateTime, reminderNote, performedBy, performedByRole));
+
+        Task.UserRef reminderAssignedTo = extractUserRefFromPayload(payload, "reminderAssignedTo");
+
+        return ResponseEntity.ok(taskService.setReminder(id, reminderDateTime, reminderNote, reminderAssignedTo, performedBy, performedByRole));
     }
 
     @PutMapping("/{id}/reminder/complete")
@@ -178,11 +194,35 @@ public class TaskController {
         String rescheduleReason = (String) payload.get("rescheduleReason");
         String performedBy = (String) payload.getOrDefault("performedBy", "Staff");
         String performedByRole = (String) payload.getOrDefault("performedByRole", "STAFF");
-        return ResponseEntity.ok(taskService.rescheduleReminder(id, newReminderDateTime, rescheduleReason, performedBy, performedByRole));
+
+        Task.UserRef reminderAssignedTo = extractUserRefFromPayload(payload, "reminderAssignedTo");
+
+        return ResponseEntity.ok(taskService.rescheduleReminder(id, newReminderDateTime, rescheduleReason, reminderAssignedTo, performedBy, performedByRole));
     }
 
     @GetMapping("/reminders/due")
-    public ResponseEntity<List<Task>> getDueReminders() {
-        return ResponseEntity.ok(taskService.getDueReminders());
+    public ResponseEntity<List<Task>> getDueReminders(@RequestParam(required = false) String staffId) {
+        return ResponseEntity.ok(taskService.getDueReminders(staffId));
+    }
+
+    @SuppressWarnings("unchecked")
+    private Task.UserRef extractUserRefFromPayload(Map<String, Object> payload, String key) {
+        if (payload.containsKey(key) && payload.get(key) instanceof Map) {
+            Map<String, Object> map = (Map<String, Object>) payload.get(key);
+            return Task.UserRef.builder()
+                    .id((String) map.get("id"))
+                    .name((String) map.get("name"))
+                    .email((String) map.get("email"))
+                    .role((String) map.get("role"))
+                    .avatar((String) map.get("avatar"))
+                    .build();
+        } else if (payload.containsKey(key + "Id") || payload.containsKey(key + "Name")) {
+            return Task.UserRef.builder()
+                    .id((String) payload.get(key + "Id"))
+                    .name((String) payload.get(key + "Name"))
+                    .role("STAFF")
+                    .build();
+        }
+        return null;
     }
 }
