@@ -145,4 +145,44 @@ public class TaskController {
         taskService.deleteTask(id);
         return ResponseEntity.noContent().build();
     }
+
+    @PutMapping("/{id}/reminder")
+    public ResponseEntity<Task> setReminder(
+            @PathVariable String id,
+            @RequestBody Map<String, Object> payload
+    ) {
+        String reminderDateTime = (String) payload.get("reminderDateTime");
+        String reminderNote = (String) payload.get("reminderNote");
+        String performedBy = (String) payload.getOrDefault("performedBy", "Staff");
+        String performedByRole = (String) payload.getOrDefault("performedByRole", "STAFF");
+        return ResponseEntity.ok(taskService.setReminder(id, reminderDateTime, reminderNote, performedBy, performedByRole));
+    }
+
+    @PutMapping("/{id}/reminder/complete")
+    public ResponseEntity<Task> completeReminder(
+            @PathVariable String id,
+            @RequestBody Map<String, Object> payload
+    ) {
+        String actionNotes = (String) payload.get("actionNotes");
+        String performedBy = (String) payload.getOrDefault("performedBy", "Staff");
+        String performedByRole = (String) payload.getOrDefault("performedByRole", "STAFF");
+        return ResponseEntity.ok(taskService.completeReminder(id, actionNotes, performedBy, performedByRole));
+    }
+
+    @PutMapping("/{id}/reminder/reschedule")
+    public ResponseEntity<Task> rescheduleReminder(
+            @PathVariable String id,
+            @RequestBody Map<String, Object> payload
+    ) {
+        String newReminderDateTime = (String) payload.get("newReminderDateTime");
+        String rescheduleReason = (String) payload.get("rescheduleReason");
+        String performedBy = (String) payload.getOrDefault("performedBy", "Staff");
+        String performedByRole = (String) payload.getOrDefault("performedByRole", "STAFF");
+        return ResponseEntity.ok(taskService.rescheduleReminder(id, newReminderDateTime, rescheduleReason, performedBy, performedByRole));
+    }
+
+    @GetMapping("/reminders/due")
+    public ResponseEntity<List<Task>> getDueReminders() {
+        return ResponseEntity.ok(taskService.getDueReminders());
+    }
 }

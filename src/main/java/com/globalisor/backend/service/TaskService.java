@@ -160,6 +160,14 @@ public class TaskService {
         if (updated.getClientEmail() != null) existing.setClientEmail(updated.getClientEmail());
         if (updated.getDueDate() != null) existing.setDueDate(updated.getDueDate());
         if (updated.getAssignedTo() != null) existing.setAssignedTo(updated.getAssignedTo());
+        if (updated.getReminderDateTime() != null) existing.setReminderDateTime(updated.getReminderDateTime());
+        if (updated.getReminderNote() != null) existing.setReminderNote(updated.getReminderNote());
+        if (updated.getReminderStatus() != null) existing.setReminderStatus(updated.getReminderStatus());
+        if (updated.getReminderCompletedAt() != null) existing.setReminderCompletedAt(updated.getReminderCompletedAt());
+        if (updated.getReminderCompletedBy() != null) existing.setReminderCompletedBy(updated.getReminderCompletedBy());
+        if (updated.getReminderActionNotes() != null) existing.setReminderActionNotes(updated.getReminderActionNotes());
+        if (updated.getReminderRescheduledAt() != null) existing.setReminderRescheduledAt(updated.getReminderRescheduledAt());
+        if (updated.getReminderRescheduledBy() != null) existing.setReminderRescheduledBy(updated.getReminderRescheduledBy());
         existing.setUpdatedAt(System.currentTimeMillis());
 
         return taskRepository.save(existing);
@@ -903,5 +911,167 @@ public class TaskService {
                     "Task cannot be deleted because it has already moved past the initial stage. Current status: " + status);
         }
         taskRepository.deleteById(id);
+    }
+
+    public Task setReminder(String taskId, String reminderDateTime, String reminderNote, String performedByName, String performedByRole) {
+        Task task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Task not found with id: " + taskId));
+
+        long now = System.currentTimeMillis();
+        task.setReminderDateTime(reminderDateTime);
+        task.setReminderNote(reminderNote);
+        task.setReminderStatus("PENDING");
+        task.setUpdatedAt(now);
+
+        String detailText = "Scheduled next follow-up reminder for " + reminderDateTime +
+                (reminderNote != null && !reminderNote.isBlank() ? " ('" + reminderNote + "')" : "");
+
+        if (task.getActivityLog() == null) task.setActivityLog(new ArrayList<>());
+        task.getActivityLog().add(Task.ActivityLog.builder()
+                .id("act-" + UUID.randomUUID())
+                .action("REMINDER_SET")
+                .details(detailText)
+                .performedBy(performedByName != null ? performedByName : "Staff")
+                .performedByRole(performedByRole != null ? performedByRole : "STAFF")
+                .timestamp(now)
+                .build());
+
+        // Also add an internal team comment
+        if (task.getComments() == null) task.setComments(new ArrayList<>());
+        task.getComments().add(Task.Comment.builder()
+                .id("cmt-" + UUID.randomUUID())
+                .authorName(performedByName != null ? performedByName : "Staff")
+                .authorRole(performedByRole != null ? performedByRole : "STAFF")
+                .authorAvatar("RM")
+                .text("⏰ Next Follow-up Reminder Scheduled:\n" + reminderDateTime +
+                        (reminderNote != null && !reminderNote.isBlank() ? "\nNote: " + reminderNote : ""))
+                .isInternal(true)
+                .timestamp(now)
+                .build());
+
+        return taskRepository.save(task);
+    }
+
+    public Task completeReminder(String taskId, String actionNotes, String performedByName, String performedByRole) {
+        Task task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Task not found with id: " + taskId));
+
+        long now = System.currentTimeMillis();
+        task.setReminderStatus("COMPLETED");
+        task.setReminderCompletedAt(now);
+        task.setReminderCompletedBy(performedByName != null ? performedByName : "Staff");
+        task.setReminderActionNotes(actionNotes);
+        task.setUpdatedAt(now);
+
+        String detailText = "Follow-up reminder attended & completed. Action Taken: " +
+                (actionNotes != null && !actionNotes.isBlank() ? actionNotes : "No action notes specified");
+
+        if (task.getActivityLog() == null) task.setActivityLog(new ArrayList<>());
+        task.getActivityLog().add(Task.ActivityLog.builder()
+                .id("act-" + UUID.randomUUID())
+                .action("REMINDER_ATTENDED")
+                .details(detailText)
+                .performedBy(performedByName != null ? performedByName : "Staff")
+                .performedByRole(performedByRole != null ? performedByRole : "STAFF")
+                .timestamp(now)
+                .build());
+
+        // Internal team comment recording action taken
+        if (task.getComments() == null) task.setComments(new ArrayList<>());
+        task.getComments().add(Task.Comment.builder()
+                .id("cmt-" + UUID.randomUUID())
+                .authorName(performedByName != null ? performedByName : "Staff")
+                .authorRole(performedByRole != null ? performedByRole : "STAFF")
+                .authorAvatar("RM")
+                .text("✅ Follow-up Attended & Completed by " + (performedByName != null ? performedByName : "Staff") +
+                        "\nAction Taken: " + (actionNotes != null && !actionNotes.isBlank() ? actionNotes : "Completed"))
+                .isInternal(true)
+                .timestamp(now)
+                .build());
+
+        return taskRepository.save(task);
+    }
+
+    public Task rescheduleReminder(String taskId, String newReminderDateTime, String rescheduleReason, String performedByName, String performedByRole) {
+        Task task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Task not found with id: " + taskId));
+
+        long now = System.currentTimeMillis();
+        String oldDateTime = task.getReminderDateTime();
+        task.setReminderDateTime(newReminderDateTime);
+        task.setReminderStatus("PENDING");
+        task.setReminderRescheduledAt(now);
+        task.setReminderRescheduledBy(performedByName != null ? performedByName : "Staff");
+        if (rescheduleReason != null && !rescheduleReason.isBlank()) {
+            task.setReminderNote(rescheduleReason);
+        }
+        task.setUpdatedAt(now);
+
+        String detailText = "Follow-up reminder rescheduled from " + oldDateTime + " to " + newReminderDateTime +
+                (rescheduleReason != null && !rescheduleReason.isBlank() ? ". Reason: " + rescheduleReason : "");
+
+        if (task.getActivityLog() == null) task.setActivityLog(new ArrayList<>());
+        task.getActivityLog().add(Task.ActivityLog.builder()
+                .id("act-" + UUID.randomUUID())
+                .action("REMINDER_RESCHEDULED")
+                .details(detailText)
+                .performedBy(performedByName != null ? performedByName : "Staff")
+                .performedByRole(performedByRole != null ? performedByRole : "STAFF")
+                .timestamp(now)
+                .build());
+
+        if (task.getComments() == null) task.setComments(new ArrayList<>());
+        task.getComments().add(Task.Comment.builder()
+                .id("cmt-" + UUID.randomUUID())
+                .authorName(performedByName != null ? performedByName : "Staff")
+                .authorRole(performedByRole != null ? performedByRole : "STAFF")
+                .authorAvatar("RM")
+                .text("🔄 Follow-up Rescheduled to " + newReminderDateTime + " by " + (performedByName != null ? performedByName : "Staff") +
+                        (rescheduleReason != null && !rescheduleReason.isBlank() ? "\nReason: " + rescheduleReason : ""))
+                .isInternal(true)
+                .timestamp(now)
+                .build());
+
+        return taskRepository.save(task);
+    }
+
+    public List<Task> getDueReminders() {
+        List<Task> all = taskRepository.findAll(Sort.by(Sort.Direction.ASC, "reminderDateTime"));
+        long now = System.currentTimeMillis();
+        List<Task> due = new ArrayList<>();
+
+        for (Task t : all) {
+            if (t.getReminderDateTime() == null || t.getReminderDateTime().trim().isEmpty()) {
+                continue;
+            }
+            String status = t.getReminderStatus();
+            if ("COMPLETED".equalsIgnoreCase(status) || "CANCELLED".equalsIgnoreCase(status)) {
+                continue;
+            }
+            // Parse reminderDateTime (supports ISO "YYYY-MM-DDTHH:mm" or "YYYY-MM-DD HH:mm" or timestamp)
+            try {
+                String dtStr = t.getReminderDateTime().trim();
+                long reminderTime = 0L;
+                if (dtStr.matches("^\\d+$")) {
+                    reminderTime = Long.parseLong(dtStr);
+                } else {
+                    java.time.LocalDateTime ldt;
+                    if (dtStr.contains("T")) {
+                        ldt = java.time.LocalDateTime.parse(dtStr.length() > 16 ? dtStr.substring(0, 16) : dtStr);
+                    } else {
+                        ldt = java.time.LocalDateTime.parse(dtStr.replace(" ", "T"));
+                    }
+                    reminderTime = ldt.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+                }
+                // Include if reminderTime <= now + 5 minutes
+                if (reminderTime <= (now + 300000L)) {
+                    due.add(t);
+                }
+            } catch (Exception e) {
+                // If parsing fails but it's set and not completed, include it as pending
+                due.add(t);
+            }
+        }
+        return due;
     }
 }

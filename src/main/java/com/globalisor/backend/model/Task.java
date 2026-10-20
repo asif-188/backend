@@ -1,7 +1,9 @@
 package com.globalisor.backend.model;
 
+import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.CompoundIndexes;
@@ -13,6 +15,8 @@ import java.util.List;
 
 @Data
 @Builder
+@NoArgsConstructor
+@AllArgsConstructor
 @Document(collection = "tasks")
 @CompoundIndexes({
     @CompoundIndex(name = "task_client_status_idx", def = "{'clientId': 1, 'status': 1}"),
@@ -77,47 +81,22 @@ public class Task {
     private Integer slaHours;
     private String resolutionNotes;
     
+    // Follow-up Reminder fields
+    @Indexed
+    private String reminderDateTime; // e.g. "2026-10-21T10:00"
+    private String reminderNote; // e.g. "Call client and follow up the document"
+    @Indexed
+    private String reminderStatus; // PENDING, COMPLETED, RESCHEDULED
+    private Long reminderCompletedAt;
+    private String reminderCompletedBy;
+    private String reminderActionNotes;
+    private Long reminderRescheduledAt;
+    private String reminderRescheduledBy;
+
     @Indexed
     private Long createdAt;
     private Long updatedAt;
     private Long resolvedAt;
-
-    public Task() {
-    }
-
-    public Task(String id, String ticketNumber, String clientId, String clientName, String clientEmail,
-                String companyId, String companyName, String title, String description, String type,
-                String category, String taskScope, Boolean isInternal, String priority, String status,
-                UserRef assignedTo, UserRef createdBy, List<Attachment> attachments, List<Comment> comments,
-                List<ActivityLog> activityLog, String dueDate, Integer slaHours, String resolutionNotes,
-                Long createdAt, Long updatedAt, Long resolvedAt) {
-        this.id = id;
-        this.ticketNumber = ticketNumber;
-        this.clientId = clientId;
-        this.clientName = clientName;
-        this.clientEmail = clientEmail;
-        this.companyId = companyId;
-        this.companyName = companyName;
-        this.title = title;
-        this.description = description;
-        this.type = type;
-        this.category = category;
-        this.taskScope = taskScope;
-        this.isInternal = isInternal;
-        this.priority = priority;
-        this.status = status;
-        this.assignedTo = assignedTo;
-        this.createdBy = createdBy;
-        this.attachments = attachments != null ? attachments : new ArrayList<>();
-        this.comments = comments != null ? comments : new ArrayList<>();
-        this.activityLog = activityLog != null ? activityLog : new ArrayList<>();
-        this.dueDate = dueDate;
-        this.slaHours = slaHours;
-        this.resolutionNotes = resolutionNotes;
-        this.createdAt = createdAt;
-        this.updatedAt = updatedAt;
-        this.resolvedAt = resolvedAt;
-    }
 
     @Data
     @Builder
