@@ -50,6 +50,9 @@ public class User {
     private Long assignedAt;
     private String assignedBy;
 
+    // Staff Sticky Notes
+    private String stickyNotesJson;
+
     public User(String firstName, String lastName, String email, String password) {
         this.firstName = firstName;
         this.lastName = lastName;
