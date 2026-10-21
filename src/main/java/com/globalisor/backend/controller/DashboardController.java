@@ -41,6 +41,27 @@ public class DashboardController {
     @Autowired
     ChatWebSocketHandler chatWebSocketHandler;
 
+    private static class CachedCounts {
+        final long totalTasksCount;
+        final long activeTasksCount;
+        final long completedTasksCount;
+        final long pendingKycCount;
+        final long totalCompliancesCount;
+        final long timestamp;
+
+        CachedCounts(long totalTasksCount, long activeTasksCount, long completedTasksCount, long pendingKycCount, long totalCompliancesCount, long timestamp) {
+            this.totalTasksCount = totalTasksCount;
+            this.activeTasksCount = activeTasksCount;
+            this.completedTasksCount = completedTasksCount;
+            this.pendingKycCount = pendingKycCount;
+            this.totalCompliancesCount = totalCompliancesCount;
+            this.timestamp = timestamp;
+        }
+    }
+
+    private volatile CachedCounts cachedCounts = null;
+    private static final long COUNTS_CACHE_TTL_MS = 15000L; // 15 seconds cache for heavy count queries
+
     @GetMapping
     public ResponseEntity<?> getDashboardData(
             @RequestParam(value = "page", defaultValue = "0") int page,
@@ -48,13 +69,43 @@ public class DashboardController {
             @RequestParam(value = "search", required = false) String search,
             @RequestParam(value = "status", required = false) String status,
             @RequestParam(value = "staff", required = false) String staff) {
-        List<User> allUsers = userRepository.findAll();
+        
+        // Use lightweight projection to fetch only needed fields, skipping heavy base64 and files
+        List<User> allUsers = userRepository.findAllForDashboard();
         Set<String> activeStaffNames = allUsers.stream()
                 .filter(u -> "STAFF".equalsIgnoreCase(u.getRole()))
                 .map(u -> ((u.getFirstName() != null ? u.getFirstName() : "") + " " + (u.getLastName() != null ? u.getLastName() : "")).trim().toLowerCase())
                 .collect(Collectors.toSet());
 
-        List<Requirement> requirements = requirementRepository.findAll();
+        List<Requirement> requirements = requirementRepository.findAllForDashboard();
+
+        // 1-pass indexing of requirements by userId and email for O(1) matching (avoids O(N*M) scanning)
+        Map<String, List<Requirement>> reqsByUserId = new HashMap<>();
+        Map<String, List<Requirement>> reqsByEmail = new HashMap<>();
+        long incorporatedCount = 0;
+        long pendingOnboardingCount = 0;
+        long totalRejectedCount = 0;
+
+        for (Requirement r : requirements) {
+            if (r.getUserId() != null && !r.getUserId().trim().isEmpty()) {
+                reqsByUserId.computeIfAbsent(r.getUserId().trim(), k -> new ArrayList<>()).add(r);
+            }
+            if (r.getData() != null && r.getData().get("email") != null) {
+                String email = String.valueOf(r.getData().get("email")).trim().toLowerCase();
+                if (!email.isEmpty()) {
+                    reqsByEmail.computeIfAbsent(email, k -> new ArrayList<>()).add(r);
+                }
+            }
+
+            String s = r.getStatus() != null ? r.getStatus().toLowerCase() : "";
+            if (s.equals("approved") || s.equals("completed") || s.equals("verified")) {
+                incorporatedCount++;
+            } else if (s.equals("rejected")) {
+                totalRejectedCount++;
+            } else {
+                pendingOnboardingCount++;
+            }
+        }
 
         List<User> users = allUsers.stream()
                 .filter(u -> {
@@ -73,13 +124,28 @@ public class DashboardController {
                 .collect(Collectors.toList());
 
         List<DashboardResponse.ClientInfo> clientInfos = users.stream().map(user -> {
-            List<Requirement> userReqs = requirements.stream()
-                    .filter(r -> (r.getUserId() != null && r.getUserId().equals(user.getId())) ||
-                                 (user.getEmail() != null && r.getData() != null && user.getEmail().equalsIgnoreCase(String.valueOf(r.getData().get("email")))))
-                    .collect(Collectors.toList());
+            Set<Requirement> userReqsSet = new LinkedHashSet<>();
+            if (user.getId() != null) {
+                List<Requirement> byId = reqsByUserId.get(user.getId().trim());
+                if (byId != null) userReqsSet.addAll(byId);
+            }
+            if (user.getEmail() != null) {
+                List<Requirement> byEmail = reqsByEmail.get(user.getEmail().trim().toLowerCase());
+                if (byEmail != null) userReqsSet.addAll(byEmail);
+            }
+            List<Requirement> userReqs = new ArrayList<>(userReqsSet);
+            userReqs.sort((a, b) -> {
+                Date d1 = a.getUpdatedAt() != null ? a.getUpdatedAt() : a.getCreatedAt();
+                Date d2 = b.getUpdatedAt() != null ? b.getUpdatedAt() : b.getCreatedAt();
+                if (d1 == null && d2 == null) return 0;
+                if (d1 == null) return 1;
+                if (d2 == null) return -1;
+                return d2.compareTo(d1);
+            });
 
-            String latestStatus = userReqs.isEmpty() ? "pending" : userReqs.get(0).getStatus();
-            String latestActivity = userReqs.isEmpty() ? "Joined" : userReqs.get(0).getUpdatedAt().toString();
+            String latestStatus = userReqs.isEmpty() ? "pending" : (userReqs.get(0).getStatus() != null ? userReqs.get(0).getStatus() : "pending");
+            Date latestDate = userReqs.isEmpty() ? null : (userReqs.get(0).getUpdatedAt() != null ? userReqs.get(0).getUpdatedAt() : userReqs.get(0).getCreatedAt());
+            String latestActivity = latestDate != null ? latestDate.toString() : "Joined";
             
             List<String> companyNames = new ArrayList<>();
             List<String> serviceTypes = new ArrayList<>();
@@ -92,9 +158,9 @@ public class DashboardController {
                 if (data != null && data.containsKey("names")) {
                     Object namesObj = data.get("names");
                     if (namesObj instanceof List) {
-                        List<String> names = (List<String>) namesObj;
-                        if (!names.isEmpty() && names.get(0) != null && !names.get(0).isEmpty()) {
-                            companyNames.add(names.get(0));
+                        List<?> names = (List<?>) namesObj;
+                        if (!names.isEmpty() && names.get(0) != null && !names.get(0).toString().isEmpty()) {
+                            companyNames.add(names.get(0).toString());
                         }
                     }
                 }
@@ -103,14 +169,14 @@ public class DashboardController {
                 if (data != null && data.containsKey("excelData")) {
                     Object excelObj = data.get("excelData");
                     if (excelObj instanceof Map) {
-                        Map<String, Object> excel = (Map<String, Object>) excelObj;
+                        Map<?, ?> excel = (Map<?, ?>) excelObj;
                         if (excel.containsKey("directors")) {
                             Object dirObj = excel.get("directors");
                             if (dirObj instanceof List) {
                                 List<?> dirList = (List<?>) dirObj;
                                 for (Object dObj : dirList) {
                                     if (dObj instanceof Map) {
-                                        Map<String, Object> dir = (Map<String, Object>) dObj;
+                                        Map<?, ?> dir = (Map<?, ?>) dObj;
                                         Object typeObj = dir.get("type");
                                         Object nameObj = dir.get("name");
                                         if (typeObj != null && "Nominee Director".equalsIgnoreCase(typeObj.toString().trim()) && nameObj != null) {
@@ -137,7 +203,8 @@ public class DashboardController {
                 }
             }
 
-            boolean isOnline = chatWebSocketHandler.isUserOnline(user.getId());
+            // In-memory zero-DB websocket presence check
+            boolean isOnline = chatWebSocketHandler.isUserOnline(user.getId(), user.getEmail());
             Long lastSeen = user.getLastSeenTime();
 
             String assignedStaffName = "Unassigned";
@@ -157,9 +224,14 @@ public class DashboardController {
 
             String assignedStaffId = user.getAssignedStaffId() != null ? user.getAssignedStaffId() : "";
 
+            String fullName = ((user.getFirstName() != null ? user.getFirstName() : "") + " " + (user.getLastName() != null ? user.getLastName() : "")).trim();
+            if (fullName.isEmpty()) {
+                fullName = user.getEmail() != null ? user.getEmail() : "Client";
+            }
+
             return new DashboardResponse.ClientInfo(
                     user.getId(),
-                    user.getFirstName() + " " + user.getLastName(),
+                    fullName,
                     user.getEmail(),
                     companyNames,
                     nomineeDirectors,
@@ -178,14 +250,19 @@ public class DashboardController {
         }).collect(Collectors.toList());
 
         long activeClientsCount = users.stream().filter(u -> "ACTIVE".equalsIgnoreCase(u.getStatus()) || u.getStatus() == null).count();
-        long totalTasksCount = taskRepository != null ? taskRepository.count() : 0L;
-        long activeTasksCount = taskRepository != null ? taskRepository.countByStatusIn(Arrays.asList("PENDING", "ASSIGNED", "IN_PROGRESS", "WAITING_CLIENT_INPUT", "UNDER_REVIEW")) : 0L;
-        long completedTasksCount = taskRepository != null ? taskRepository.countByStatusIn(Arrays.asList("COMPLETED", "RESOLVED")) : 0L;
-        long pendingKycCount = kycRepository != null ? kycRepository.count() : 0L;
-        long totalCompliancesCount = complianceRepository != null ? complianceRepository.count() : 0L;
-        long incorporatedCount = requirements.stream().filter(r -> "approved".equalsIgnoreCase(r.getStatus()) || "completed".equalsIgnoreCase(r.getStatus())).count();
-        long pendingOnboardingCount = requirements.stream().filter(r -> "pending".equalsIgnoreCase(r.getStatus()) || "review".equalsIgnoreCase(r.getStatus()) || "under review".equalsIgnoreCase(r.getStatus())).count();
-        long rejectedCount = requirements.stream().filter(r -> "rejected".equalsIgnoreCase(r.getStatus())).count();
+
+        // Cached counts to avoid multiple remote Mongo round-trips per pagination request
+        long now = System.currentTimeMillis();
+        CachedCounts counts = this.cachedCounts;
+        if (counts == null || (now - counts.timestamp) > COUNTS_CACHE_TTL_MS) {
+            long totalTasksCount = taskRepository != null ? taskRepository.count() : 0L;
+            long activeTasksCount = taskRepository != null ? taskRepository.countByStatusIn(Arrays.asList("PENDING", "ASSIGNED", "IN_PROGRESS", "WAITING_CLIENT_INPUT", "UNDER_REVIEW")) : 0L;
+            long completedTasksCount = taskRepository != null ? taskRepository.countByStatusIn(Arrays.asList("COMPLETED", "RESOLVED")) : 0L;
+            long pendingKycCount = kycRepository != null ? kycRepository.count() : 0L;
+            long totalCompliancesCount = complianceRepository != null ? complianceRepository.count() : 0L;
+            counts = new CachedCounts(totalTasksCount, activeTasksCount, completedTasksCount, pendingKycCount, totalCompliancesCount, now);
+            this.cachedCounts = counts;
+        }
 
         Map<String, Object> stats = new HashMap<>();
         stats.put("totalClients", (long) users.size());
@@ -193,14 +270,14 @@ public class DashboardController {
         stats.put("totalServices", (long) requirements.size());
         stats.put("pending", pendingOnboardingCount);
         stats.put("approved", incorporatedCount);
-        stats.put("rejected", rejectedCount);
+        stats.put("rejected", totalRejectedCount);
         stats.put("pendingOnboarding", pendingOnboardingCount);
-        stats.put("pendingVerification", pendingKycCount);
-        stats.put("activeTasks", activeTasksCount);
-        stats.put("completedTasks", completedTasksCount);
-        stats.put("totalTasks", totalTasksCount);
+        stats.put("pendingVerification", counts.pendingKycCount);
+        stats.put("activeTasks", counts.activeTasksCount);
+        stats.put("completedTasks", counts.completedTasksCount);
+        stats.put("totalTasks", counts.totalTasksCount);
         stats.put("companiesIncorporated", incorporatedCount);
-        stats.put("annualReturns", totalCompliancesCount);
+        stats.put("annualReturns", counts.totalCompliancesCount);
         stats.put("slaCompliance", 98L);
 
         // 1. Filter by search

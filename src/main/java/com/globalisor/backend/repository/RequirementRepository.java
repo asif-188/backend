@@ -22,4 +22,7 @@ public interface RequirementRepository extends MongoRepository<Requirement, Stri
     long countByStatusIgnoreCase(String status);
     long countByStatusIn(List<String> statuses);
     void deleteByUserId(String userId);
+
+    @org.springframework.data.mongodb.repository.Query(value = "{}", fields = "{ 'id': 1, 'userId': 1, 'status': 1, 'staff': 1, 'createdAt': 1, 'updatedAt': 1, 'data.names': 1, 'data.email': 1, 'data.serviceType': 1, 'data.excelData.directors': 1 }")
+    List<Requirement> findAllForDashboard();
 }

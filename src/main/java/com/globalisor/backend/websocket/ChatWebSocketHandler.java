@@ -54,11 +54,12 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         String searchEmail = (email != null && !email.trim().isEmpty()) ? email.trim() : (userId != null && userId.contains("@") ? userId.trim() : null);
         if (searchEmail != null) {
             String normSearch = searchEmail.toLowerCase().trim();
-            for (User u : userRepository.findAll()) {
-                String uEmail = u.getEmail();
-                if (uEmail != null) {
-                    if (uEmail.equalsIgnoreCase(normSearch)) return u;
-                    if (encryptionUtils != null && (uEmail.endsWith("=") || uEmail.length() > 40)) {
+            Optional<User> uOpt = userRepository.findFirstByEmailIgnoreCase(normSearch);
+            if (uOpt.isPresent()) return uOpt.get();
+            if (encryptionUtils != null) {
+                for (User u : userRepository.findAll()) {
+                    String uEmail = u.getEmail();
+                    if (uEmail != null && (uEmail.endsWith("=") || uEmail.length() > 40)) {
                         try {
                             String dec = encryptionUtils.decryptQueryable(uEmail);
                             if (dec != null && dec.equalsIgnoreCase(normSearch)) return u;
@@ -86,19 +87,23 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    // Helper method to get map of online users
+    // Fast in-memory check for online users (zero DB queries)
     public boolean isUserOnline(String identifier) {
-        if (identifier == null || identifier.trim().isEmpty()) return false;
+        if (identifier == null || identifier.trim().isEmpty() || userSessions.isEmpty()) return false;
         String idKey = identifier.trim();
-        if (hasAnyOpenSession(idKey) || hasAnyOpenSession(idKey.toLowerCase())) return true;
-        User u = resolveUser(idKey, null);
-        if (u != null) {
-            if (u.getId() != null) {
-                if (hasAnyOpenSession(u.getId()) || hasAnyOpenSession(u.getId().toLowerCase())) return true;
-            }
-            if (u.getEmail() != null) {
-                if (hasAnyOpenSession(u.getEmail().toLowerCase().trim())) return true;
-            }
+        return hasAnyOpenSession(idKey) || hasAnyOpenSession(idKey.toLowerCase());
+    }
+
+    // Fast in-memory check for online users using both userId and email (zero DB queries)
+    public boolean isUserOnline(String userId, String email) {
+        if (userSessions.isEmpty()) return false;
+        if (userId != null && !userId.trim().isEmpty()) {
+            String idKey = userId.trim();
+            if (hasAnyOpenSession(idKey) || hasAnyOpenSession(idKey.toLowerCase())) return true;
+        }
+        if (email != null && !email.trim().isEmpty()) {
+            String em = email.trim().toLowerCase();
+            if (hasAnyOpenSession(em)) return true;
         }
         return false;
     }

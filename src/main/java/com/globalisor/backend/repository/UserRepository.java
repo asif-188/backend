@@ -16,4 +16,7 @@ public interface UserRepository extends MongoRepository<User, String> {
     List<User> findByRoleIn(List<String> roles);
     long countByRoleIgnoreCase(String role);
     long countByRoleIn(List<String> roles);
+
+    @org.springframework.data.mongodb.repository.Query(value = "{}", fields = "{ 'id': 1, 'firstName': 1, 'lastName': 1, 'email': 1, 'role': 1, 'status': 1, 'lastSeenTime': 1, 'assignedStaffId': 1, 'assignedStaffName': 1 }")
+    List<User> findAllForDashboard();
 }
