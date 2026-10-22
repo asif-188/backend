@@ -1098,9 +1098,16 @@ public class TaskService {
                 continue;
             }
             if (staffId != null && !staffId.isBlank()) {
-                String assignedId = t.getReminderAssignedTo() != null ? t.getReminderAssignedTo().getId() :
-                        (t.getAssignedTo() != null ? t.getAssignedTo().getId() : null);
-                if (assignedId != null && !assignedId.equalsIgnoreCase(staffId.trim())) {
+                String target = staffId.trim().toLowerCase();
+                Task.UserRef ref = t.getReminderAssignedTo() != null ? t.getReminderAssignedTo() : t.getAssignedTo();
+                if (ref != null) {
+                    boolean idMatch = ref.getId() != null && ref.getId().equalsIgnoreCase(target);
+                    boolean emailMatch = ref.getEmail() != null && ref.getEmail().equalsIgnoreCase(target);
+                    boolean nameMatch = ref.getName() != null && ref.getName().toLowerCase().contains(target);
+                    if (!idMatch && !emailMatch && !nameMatch) {
+                        continue;
+                    }
+                } else {
                     continue;
                 }
             }
